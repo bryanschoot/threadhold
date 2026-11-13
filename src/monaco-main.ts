@@ -8,7 +8,7 @@ interface CapturedEditor { editor: MonacoEditor; root: HTMLElement; dispose(): v
 interface NativeSnapshot { root: HTMLElement; uri: string; range?: MonacoRange }
 interface DraftZone { editor: MonacoEditor; id: string; node: HTMLElement; zone: MonacoViewZone; resize: ResizeObserver }
 interface ModelIdentity { repositoryId: string; commit: string; filePath: string }
-const nativeSelector = '.repos-discussion-thread-reply .repos-comment-editor-fit textarea.threadId--1:not([aria-hidden="true"])';
+const nativeSelector = '.repos-discussion-thread-reply .repos-comment-editor-fit textarea[class*="threadId--"]:not([aria-hidden="true"])';
 
 export function parseMonacoModelUri(uri: string): ModelIdentity | undefined {
   try {
@@ -88,6 +88,24 @@ export function installMonacoController(): void {
     const models = namespace?.getModels().filter(model => model.uri.toString() === uri) ?? [];
     return models.length === 1 ? models[0] : undefined;
   }
+  function identityFor(root: HTMLElement, sourceCommit: string, targetCommit: string): ModelIdentity | undefined {
+    const model = modelFor(root);
+    if (!model) return;
+    const uri = model.uri.toString();
+    const direct = parseMonacoModelUri(uri);
+    if (direct) return direct;
+    // ADO gives the original split model an anonymous URI. Resolve only through
+    // its own diff's unique, commit-qualified modified model, never another file.
+    if (sideOf(root) !== 'left' || !/^inmemory:\/\/model\/\d+$/.test(uri)) return;
+    const diff = root.closest('.monaco-diff-editor');
+    const siblings = diff && [...diff.querySelectorAll<HTMLElement>('.modified-in-monaco-diff-editor')]
+      .filter(item => item.closest('.monaco-diff-editor') === diff);
+    if (!siblings || siblings.length !== 1) return;
+    const modified = modelFor(siblings[0]!);
+    const identity = modified && parseMonacoModelUri(modified.uri.toString());
+    if (!identity || identity.commit.toLowerCase() !== sourceCommit.toLowerCase()) return;
+    return { ...identity, commit: targetCommit };
+  }
   function captureNativeEditors() {
     if (!parsePrRoute(location.href)) return;
     for (const textarea of document.querySelectorAll<HTMLTextAreaElement>(nativeSelector)) {
@@ -102,6 +120,7 @@ export function installMonacoController(): void {
       const opening = openings.get(root);
       const openedRange = opening?.uri === model.uri.toString() ? opening.range : undefined;
       const range = requested ? rangeOf(requested) : openedRange ?? captureDiscussionRange(model.getAllDecorations(), instance.getSelection());
+      if (!range) continue;
       snapshots.set(textarea, { root, uri: model.uri.toString(), range });
       textarea.dataset.threadholdMonacoEditor = crypto.randomUUID();
       if (instance && requested) pending.delete(instance);
@@ -117,7 +136,7 @@ export function installMonacoController(): void {
       if (!snapshot?.range || !textarea.dataset.threadholdMonacoEditor) continue;
       const { root, uri, range } = snapshot;
       const model = modelFor(root);
-      const identity = parseMonacoModelUri(uri);
+      const identity = identityFor(root, context.sourceCommit, context.targetCommit);
       const side = sideOf(root);
       if (!model || model.uri.toString() !== uri || !identity || !side || identity.repositoryId.toLowerCase() !== context.scope.repositoryId.toLowerCase() ||
           identity.commit.toLowerCase() !== (side === 'right' ? context.sourceCommit : context.targetCommit).toLowerCase()) continue;
@@ -143,7 +162,7 @@ export function installMonacoController(): void {
     const matches = [...captured].filter(item => {
       if (!item.root.isConnected || !item.root.getClientRects().length || sideOf(item.root) !== anchor.side) return false;
       const model = item.editor.getModel();
-      const identity = model && parseMonacoModelUri(model.uri.toString());
+      const identity = identityFor(item.root, anchor.sourceCommit ?? '', anchor.targetCommit ?? '');
       if (!model || !identity || identity.repositoryId.toLowerCase() !== scope.repositoryId.toLowerCase() || identity.filePath !== anchor.filePath ||
           identity.commit.toLowerCase() !== (anchor.side === 'right' ? anchor.sourceCommit : anchor.targetCommit).toLowerCase()) return false;
       return range.endLineNumber <= model.getLineCount() && range.startColumn <= model.getLineMaxColumn(range.startLineNumber) && range.endColumn <= model.getLineMaxColumn(range.endLineNumber);
@@ -218,7 +237,7 @@ export function installMonacoController(): void {
   function rememberNativeRange(event: Event) {
     if (!parsePrRoute(location.href) || !(event.target instanceof Element)) return;
     if (event.type === 'click' && event instanceof MouseEvent && event.detail !== 0) return;
-    const button = event.target.closest('[widgetid$=":AddCommentGutterWidget"] button.repos-add-comment-button');
+    const button = event.target.closest('[widgetid$=":AddCommentGutterWidget"] button.repos-add-comment-button, [widgetid$=":AddCommentWidget"] button.repos-add-comment-button');
     const root = button?.closest<HTMLElement>('.monaco-editor');
     const editor = root && [...captured].find(item => item.root === root)?.editor;
     const model = editor?.getModel(), selection = editor?.getSelection();
@@ -241,7 +260,17 @@ export function installMonacoController(): void {
     const range = rangeOf(anchor);
     if (!match || !range) throw new Error(t('Open the original Monaco file version first. The exact range is not available here.', 'Open eerst de oorspronkelijke Monaco-bestandsversie. De exacte range is hier niet beschikbaar.'));
     pending.set(match.editor, anchor);
-    match.editor.setSelection(range); match.editor.revealRangeInCenter(range); match.editor.focus();
+    let selection = range;
+    // A collapsed gutter anchor has no selection widget. Select its line only
+    // to open the native editor; pending retains the draft's exact coordinates.
+    if (range.startLineNumber === range.endLineNumber && range.startColumn === range.endColumn) {
+      const model = match.editor.getModel()!;
+      const line = range.startLineNumber, endColumn = model.getLineMaxColumn(line);
+      if (endColumn > 1) selection = { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn };
+      else if (line < model.getLineCount()) selection = { ...range, endLineNumber: line + 1, endColumn: 1 };
+      else if (line > 1) selection = { ...range, startLineNumber: line - 1, startColumn: model.getLineMaxColumn(line - 1) };
+    }
+    match.editor.setSelection(selection); match.editor.revealRangeInCenter(selection); match.editor.focus();
     const { promise, resolve, reject } = Promise.withResolvers<void>();
     let clicked = false;
     const wait = new MutationObserver(find);
@@ -256,12 +285,17 @@ export function installMonacoController(): void {
       if (available) { wait.disconnect(); clearTimeout(timer); resolve(); return; }
       if (clicked) return;
       const label = anchor.side === 'right' ? 'Modified' : 'Original';
-      const buttons = [...match!.root.querySelectorAll<HTMLButtonElement>(`[widgetid$="${label}:AddCommentGutterWidget"] button.repos-add-comment-button`)]
-        .filter(button => button.getClientRects().length && !button.disabled);
-      if (buttons.length !== 1) return;
-      clicked = true; buttons[0]!.click();
+      for (const widget of ['AddCommentWidget', 'AddCommentGutterWidget']) {
+        const buttons = [...match!.root.querySelectorAll<HTMLButtonElement>(`[widgetid$="${label}:${widget}"] button.repos-add-comment-button`)]
+          .filter(button => {
+            const rect = button.getBoundingClientRect();
+            return !button.disabled && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && getComputedStyle(button).visibility === 'visible';
+          });
+        if (buttons.length !== 1) continue;
+        clicked = true; buttons[0]!.click(); return;
+      }
     }
-    wait.observe(match.root, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'disabled'] });
+    wait.observe(match.root, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'disabled', 'hidden'] });
     find(); await promise;
   }
   window.__threadholdMonaco = {

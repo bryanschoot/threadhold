@@ -320,7 +320,7 @@ export default defineContentScript({
     function scheduleMonaco() {
       if (!context || monacoPending || !document.querySelector('.monaco-editor[data-uri]')) return;
       const roots = Array.from(document.querySelectorAll('.monaco-editor[data-uri]'), root => root.getAttribute('data-uri'));
-      const nativeEditors = Array.from(document.querySelectorAll('.monaco-editor textarea.threadId--1'), textarea => textarea.id);
+      const nativeEditors = Array.from(document.querySelectorAll('.monaco-editor textarea[class*="threadId--"]:not([aria-hidden="true"])'), textarea => textarea.id);
       const signature = JSON.stringify([scopeKey(context.scope), context.sourceCommit, context.targetCommit, roots, nativeEditors, drafts.map(draft => [draft.id, draft.revision])]);
       if (signature === monacoSignature) return;
       monacoSignature = signature;

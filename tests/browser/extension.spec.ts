@@ -27,35 +27,47 @@ function expandReply(){
 replyThread.querySelector('input').addEventListener('click',expandReply);
 if(sessionStorage.getItem('expandedReply'))expandReply();
 if(new URLSearchParams(location.search).has('monaco')){
-  const root=document.createElement('div');root.className='monaco-editor modified-in-monaco-diff-editor';
-  const uri='inmemory://model/git/repo-id/GC'+ 'a'.repeat(40) +'/src/example.ts';
-  root.dataset.uri=uri;
-  root.innerHTML='<button data-select-range>Select lines 35–38</button><div widgetid="fixture:Modified:AddCommentGutterWidget"><button class="repos-add-comment-button">Add inline comment</button></div>';
-  document.querySelector('main').append(root);
-  let selection={startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:1};
-  const selected={startLineNumber:35,startColumn:5,endLineNumber:38,endColumn:58};
-  const model={uri:{toString:()=>uri},getLineCount:()=>100,getLineMaxColumn:()=>120,getAllDecorations:()=>[
-    {range:{startLineNumber:39,startColumn:1,endLineNumber:39,endColumn:62},options:{inlineClassName:'highlight-discussion-range'}}
-  ]};
-  const created=[];
-  window.monaco={editor:{getModels:()=>[model],onDidCreateEditor:callback=>{created.push(callback);return{dispose(){}}}}};
-  const zones=new Map();
-  let editorReady=false;
-  const editor={getDomNode:()=>editorReady?root:null,getModel:()=>model,getSelection:()=>selection,setSelection:range=>{selection=range},
-    revealRangeInCenter(){},focus(){},onDidDispose:()=>({dispose(){}}),onDidChangeModel:()=>({dispose(){}}),
-    changeViewZones(callback){callback({addZone(zone){const id=crypto.randomUUID();root.append(zone.domNode);zones.set(id,zone);return id},
-      removeZone(id){zones.get(id)?.domNode.remove();zones.delete(id)},layoutZone(){}})}
-  };
-  for(const callback of created)callback(editor);
-  editorReady=true;
-  root.querySelector('[data-select-range]').addEventListener('click',()=>{selection={...selected}});
-  root.querySelector('.repos-add-comment-button').addEventListener('click',()=>{
-    if(root.querySelector('textarea'))return;
-    const thread=document.createElement('div');thread.className='repos-discussion-thread';
-    thread.innerHTML='<div class="repos-discussion-thread-reply"><div class="repos-comment-editor-fit"><textarea class="threadId--1 bolt-textfield-auto-adjust-hidden" aria-hidden="true" style="position:absolute;visibility:hidden"></textarea><textarea class="threadId--1" aria-label="Inline comment"></textarea><div><button class="bolt-button">Cancel</button><button class="bolt-button primary" id="__bolt-comment-inline">Comment</button></div></div></div>';
-    root.append(thread);thread.querySelector('button').addEventListener('click',()=>thread.remove());
-    thread.querySelector('.primary').addEventListener('click',()=>fetch(location.pathname.replace('/_git/repository/pullrequest/42','/_apis/git/repositories/repo-id/pullRequests/42/threads'),{method:'POST',body:JSON.stringify({body:thread.querySelector('textarea:not([aria-hidden=\"true\"])').value})}));
-  });
+  const split=new URLSearchParams(location.search).has('split');
+  const host=document.createElement('div');host.className='monaco-diff-editor';
+  document.querySelector('main').append(host);
+  const models=[],created=[];
+  window.monaco={editor:{getModels:()=>models,onDidCreateEditor:callback=>{created.push(callback);return{dispose(){}}}}};
+  for(const side of split?['Original','Modified']:['Modified']){
+    const root=document.createElement('div');root.className='monaco-editor '+side.toLowerCase()+'-in-monaco-diff-editor';
+    const uri=side==='Original'?'inmemory://model/3':'inmemory://model/git/repo-id/GC'+'a'.repeat(40)+'/src/example.ts';
+    root.dataset.uri=uri;
+    root.innerHTML='<button data-select-single>Select line 20</button><button data-select-range>Select lines 35–38</button><div widgetid="fixture:'+side+':AddCommentGutterWidget"><button class="repos-add-comment-button">Add inline comment</button></div><div widgetid="fixture:'+side+':AddCommentWidget"><button class="repos-add-comment-button">Comment on selection</button></div>';
+    host.append(root);
+    let selection={startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:1};
+    const selected={startLineNumber:35,startColumn:5,endLineNumber:38,endColumn:58};
+    const model={uri:{toString:()=>uri},getLineCount:()=>100,getLineMaxColumn:()=>120,getAllDecorations:()=>[
+      {range:{startLineNumber:39,startColumn:1,endLineNumber:39,endColumn:62},options:{inlineClassName:'highlight-discussion-range'}}
+    ]};
+    models.push(model);
+    const zones=new Map();
+    let editorReady=false;
+    const editor={getDomNode:()=>editorReady?root:null,getModel:()=>model,getSelection:()=>selection,setSelection:range=>{selection=range},
+      revealRangeInCenter(){},focus(){
+        root.querySelector('[widgetid$=":AddCommentGutterWidget"]').hidden=true;
+        root.querySelector('[widgetid$=":AddCommentWidget"]').hidden=selection.startLineNumber===selection.endLineNumber&&selection.startColumn===selection.endColumn;
+      },onDidDispose:()=>({dispose(){}}),onDidChangeModel:()=>({dispose(){}}),
+      changeViewZones(callback){callback({addZone(zone){const id=crypto.randomUUID();root.append(zone.domNode);zones.set(id,zone);return id},
+        removeZone(id){zones.get(id)?.domNode.remove();zones.delete(id)},layoutZone(){}})}
+    };
+    for(const callback of created)callback(editor);
+    editorReady=true;
+    root.querySelector('[data-select-single]').addEventListener('click',()=>{selection={startLineNumber:20,startColumn:1,endLineNumber:20,endColumn:1}});
+    root.querySelector('[data-select-range]').addEventListener('click',()=>{selection={...selected}});
+    for(const button of root.querySelectorAll('.repos-add-comment-button')) button.addEventListener('click',()=>{
+      if(root.querySelector('textarea:not([aria-hidden="true"])'))return;
+      const thread=document.createElement('div');thread.className='repos-discussion-thread';
+      thread.innerHTML='<div class="repos-discussion-thread-reply"><div class="repos-comment-editor-fit"><textarea class="threadId--5 bolt-textfield-auto-adjust-hidden" aria-hidden="true" style="position:absolute;visibility:hidden"></textarea><textarea class="threadId--5" aria-label="Inline comment"></textarea><div><button class="bolt-button">Cancel</button><button class="bolt-button primary" id="__bolt-comment-inline">Comment</button></div></div></div>';
+      // Native focus changes must not replace the opening selection.
+      selection={startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:1};
+      root.append(thread);thread.querySelector('button').addEventListener('click',()=>thread.remove());
+      thread.querySelector('.primary').addEventListener('click',()=>fetch(location.pathname.replace('/_git/repository/pullrequest/42','/_apis/git/repositories/repo-id/pullRequests/42/threads'),{method:'POST',body:JSON.stringify({body:thread.querySelector('textarea:not([aria-hidden="true"])').value})}));
+    });
+  }
 }
 </script></body></html>`;
 let context: BrowserContext;
@@ -240,11 +252,12 @@ test('an uncertain header publication preserves its draft and cannot silently re
   expect(writes).toBe(1);
 });
 
-test('Monaco multiline draft preserves columns and reopens the native editor after reload', async () => {
-  await page.goto(`${url}?_a=files&path=/src/example.ts&monaco=1`);
-  const monaco = page.locator('.monaco-editor');
-  await monaco.getByRole('button', { name: 'Select lines 35–38', exact: true }).click();
-  await monaco.getByRole('button', { name: 'Add inline comment', exact: true }).click();
+for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) {
+test(`Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} draft survives native editing and reload`, async () => {
+  await page.goto(`${url}?_a=files&path=/src/example.ts&monaco=1${split ? '&split=1' : ''}`);
+  const monaco = page.locator(side === 'left' ? '.original-in-monaco-diff-editor' : '.modified-in-monaco-diff-editor');
+  await monaco.getByRole('button', { name: multiline ? 'Select lines 35–38' : 'Select line 20', exact: true }).click();
+  await monaco.getByRole('button', { name: multiline ? 'Comment on selection' : 'Add inline comment', exact: true }).click();
   const editor = monaco.getByRole('textbox', { name: 'Inline comment', exact: true });
   await editor.fill('Multiline draft');
   await monaco.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
@@ -267,10 +280,15 @@ test('Monaco multiline draft preserves columns and reopens the native editor aft
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
   const payload = (await sent).postDataJSON();
-  expect(payload.threadContext).toEqual({ filePath: '/src/example.ts', rightFileStart: { line: 35, offset: 5 }, rightFileEnd: { line: 38, offset: 58 } });
+  expect(payload.threadContext).toEqual({
+    filePath: '/src/example.ts',
+    [side === 'left' ? 'leftFileStart' : 'rightFileStart']: multiline ? { line: 35, offset: 5 } : { line: 20, offset: 1 },
+    [side === 'left' ? 'leftFileEnd' : 'rightFileEnd']: multiline ? { line: 38, offset: 58 } : { line: 20, offset: 1 },
+  });
   await expect(card).toHaveCount(0);
   expect(writes).toBe(1);
 });
+}
 
 test('English browser gets English draft actions and native editing', async () => {
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('English local draft');

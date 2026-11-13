@@ -47,7 +47,7 @@ Onderstaande stappen gebruiken Nederlandse extensielabels. Native **Cancel** kan
 
 ## Native weergaven en compatibiliteit
 
-Algemene comments, replies en inline drafts gebruiken de bestaande Azure DevOps-editor. Meerregelige anchors bewaren begin- en eindregel én kolommen. De Monaco-enkelbestandseditor gebruikt de publieke editor-API voor selectie en lokale viewzones, niet verborgen React-state.
+Algemene comments, replies en inline drafts gebruiken de bestaande Azure DevOps-editor. Enkele en meerregelige anchors bewaren begin- en eindregel én kolommen, in inline en aan beide kanten van side-by-side. De Monaco-enkelbestandseditor gebruikt de publieke editor-API voor selectie en lokale viewzones, niet verborgen React-state. Native tijdelijke thread-ID's mogen aflopen naar andere negatieve waarden. Een anoniem origineel model wordt alleen gekoppeld via de unieke modified-partner binnen dezelfde diff, met gecontroleerde repository en sourcecommit.
 
 Azure DevOps biedt geen stabiel contract voor deze DOM-uitbreiding. Onbekende of ambigue locaties krijgen geen gegokte draftbinding. Een UI-update kan aanpassing van de adapter vereisen. Gewone native publicatie zonder draftbinding blijft ongewijzigd.
 
@@ -77,8 +77,9 @@ Kaarten en gekoppelde controls hebben `data-threadhold-draft-id` en `data-thread
 
 ## Verificatiegrens
 
-- Typecheck, productiebuild, 38 unittests en 7 browsercases zijn uitgevoerd en geslaagd.
-- De browsercases laden de echte unpacked extensie in een geïsoleerd profiel en dekken beide talen, lokale CRUD, refresh, multiline Monaco-anchors, verborgen meetvelden, native actieremounts en bevestigde publicatie tegen een fixture.
-- In echte Azure DevOps zijn native lettertype/padding en lokale replybewerking gecontroleerd.
-- De laatste live meerregelige eindcontrole kon niet worden afgerond door het verbreken van de browserrelay. De gebruiker heeft gekozen die controle handmatig te doen.
+- Eerder zijn 38 unittests en 7 browsercases uitgevoerd en geslaagd.
+- De herstelronde voor inline/split is geverifieerd met typecheck, productiebuild en zes gerichte browsercases: enkele en meerregelige comments, inline rechts en split links/rechts. Elke case controleert opslag, refresh, native heropenen met verborgen gutterknop, lokale bewerking en het exacte publicatiepayload tegen een fixture.
+- De browsercases laden de echte unpacked extensie in een geïsoleerd profiel. Ze bewijzen geen stabiel Azure DevOps-DOM-contract.
+- In echte Azure DevOps zijn native lettertype/padding, lokale replybewerking, Engelse draftacties, tijdelijke thread-ID's anders dan -1 en meerregelige bindings links/rechts gecontroleerd. Een lokale linkerdraft bleef na refresh zichtbaar. Alleen de eigen proefdrafts zijn lokaal verwijderd.
+- De laatste live potloodcontrole kon niet worden afgerond: de pagina bleef een eerdere Monaco-bundel laden, ook na de gemelde extensieherlaadactie. De nieuwere heropeningsfix is uitsluitend door de zes gerichte browsercases geverifieerd.
 - Er zijn geen echte Azure DevOps-comments gepubliceerd voor deze verificatie. Live serverpublicatie en store-installatie worden niet als geverifieerd geclaimd.
