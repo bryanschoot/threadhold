@@ -74,3 +74,11 @@ Kaarten en gekoppelde controls hebben `data-threadhold-draft-id` en `data-thread
 - Multi-tabupdates gebruiken revisiecontrole. Bij een conflict wordt geen andere revisie overschreven; de native editor behoudt de tekst.
 - Onderbroken publicatie krijgt status onbekend bij serviceworkerherstart. Geen automatische retry en geen exactly-once-garantie.
 - Verwijderen van de extensie of verlies van het browserprofiel kan drafts onherstelbaar wissen. Er is geen cloudbackup.
+
+## Verificatiegrens
+
+- Typecheck, productiebuild, 38 unittests en 7 browsercases zijn uitgevoerd en geslaagd.
+- De browsercases laden de echte unpacked extensie in een geïsoleerd profiel en dekken beide talen, lokale CRUD, refresh, multiline Monaco-anchors, verborgen meetvelden, native actieremounts en bevestigde publicatie tegen een fixture.
+- In echte Azure DevOps zijn native lettertype/padding en lokale replybewerking gecontroleerd.
+- De laatste live meerregelige eindcontrole kon niet worden afgerond door het verbreken van de browserrelay. De gebruiker heeft gekozen die controle handmatig te doen.
+- Er zijn geen echte Azure DevOps-comments gepubliceerd voor deze verificatie. Live serverpublicatie en store-installatie worden niet als geverifieerd geclaimd.
