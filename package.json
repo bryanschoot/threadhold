@@ -1,0 +1,26 @@
+{
+  "name": "threadhold",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local draft comments in the native Azure DevOps PR editor",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "playwright test tests/browser/extension.spec.ts --workers=1 --reporter=line",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "idb": "8.0.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "fake-indexeddb": "6.2.8",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0",
+    "wxt": "0.21.5"
+  }
+}

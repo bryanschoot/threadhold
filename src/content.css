@@ -1,0 +1,111 @@
+.th-card,
+.th-save {
+  --th-muted: var(--text-secondary-color, #616161);
+  --th-border: var(--component-grid-cell-bottom-border-color, #dedede);
+  --th-error: var(--status-error-text, #a4262c);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.th-card[hidden],
+.th-native-publish-hidden,
+.th-draft-editing .bolt-button.primary:not([data-threadhold-action]) {
+  display: none !important;
+}
+
+.th-card .th-comment-content {
+  min-width: 0;
+}
+
+.th-card .th-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--component-grid-header-background-color, #efefef);
+  color: var(--th-muted);
+  font-size: 11px;
+}
+
+.th-card .th-badge {
+  border: 1px solid var(--th-border);
+  border-radius: 2px;
+  color: var(--th-muted);
+  font-size: 11px;
+  line-height: 16px;
+  padding-inline: 4px;
+  white-space: nowrap;
+}
+
+.th-card .th-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  unicode-bidi: plaintext;
+}
+
+.th-card .th-actions,
+.th-card .th-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block-start: 8px;
+}
+
+.th-card .th-confirmation {
+  border-block-start: 1px solid var(--th-border);
+  padding-block-start: 8px;
+}
+
+.th-card .th-confirmation[hidden] {
+  display: none;
+}
+
+.th-card .th-confirmation-text {
+  margin: 0;
+}
+
+.th-card .th-location,
+.th-card .th-meta,
+.th-card .th-notice,
+.th-card .th-status,
+.th-save .th-status {
+  color: var(--th-muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.th-card .th-status:empty,
+.th-save .th-status:empty {
+  display: none;
+}
+
+.th-card .th-status-error,
+.th-save .th-status-error,
+.th-card .th-button-danger {
+  color: var(--th-error);
+}
+
+.th-save {
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  vertical-align: middle;
+  margin: 0;
+  width: auto;
+}
+
+.th-save .th-status {
+  margin: 0;
+}
+
+.th-publish {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

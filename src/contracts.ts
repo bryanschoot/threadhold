@@ -1,0 +1,58 @@
+export type DraftKind = 'general' | 'inline' | 'reply';
+export type DraftState = 'saved' | 'sending' | 'unknown';
+export interface PrRoute {
+  origin: string;
+  organization: string;
+  project: string;
+  repository: string;
+  pullRequestId: number;
+  organizationUrl: string;
+  prUrl: string;
+}
+export interface Scope {
+  route: PrRoute;
+  projectId: string;
+  repositoryId: string;
+  userId: string;
+}
+export interface Position { line: number; offset: number }
+export interface Anchor {
+  kind: DraftKind;
+  filePath?: string;
+  side?: 'left' | 'right';
+  start?: Position;
+  end?: Position;
+  firstIteration?: number;
+  secondIteration?: number;
+  changeTrackingId?: number;
+  sourceCommit: string;
+  targetCommit: string;
+  threadId?: number;
+  editorKey: string;
+  pageUrl: string;
+}
+export interface Draft {
+  id: string;
+  scope: Scope;
+  anchor: Anchor;
+  body: string;
+  revision: number;
+  state: DraftState;
+  createdAt: string;
+  updatedAt: string;
+  submission?: { body: string; startedAt: string; knownCommentIds: string[] };
+}
+export type DraftRequest =
+  | { action: 'list'; scope: Scope }
+  | { action: 'get'; scope: Scope; id: string }
+  | { action: 'create'; scope: Scope; anchor: Anchor; body: string; requestId: string }
+  | { action: 'update'; scope: Scope; id: string; ifRevision: number; body: string; anchor?: Anchor }
+  | { action: 'delete'; scope: Scope; id: string; ifRevision: number }
+  | { action: 'beginSubmit'; scope: Scope; id: string; ifRevision: number; body: string; knownCommentIds: string[] }
+  | { action: 'finishSubmit'; scope: Scope; id: string; ifRevision: number; outcome: 'published' | 'failed' | 'unknown'; remoteThreadId?: number; remoteCommentId?: number };
+export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: true };
+export type ExtensionRequest = { channel: 'threadhold'; request: DraftRequest };
+export type ExtensionResponse = { ok: true; result: DraftResult } | { ok: false; error: { code: string; message: string } };
+export function scopeKey(scope: Scope): string {
+  return JSON.stringify([scope.route.origin.toLowerCase(), scope.route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), scope.route.pullRequestId, scope.userId.toLowerCase()]);
+}

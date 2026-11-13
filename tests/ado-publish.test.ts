@@ -1,0 +1,49 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { postDraft } from '../src/ado-publish';
+import { parsePrRoute } from '../src/routes';
+import type { Draft } from '../src/contracts';
+import type { PrContext, RemoteThread } from '../src/ado-context';
+
+const route = parsePrRoute('https://dev.azure.com/org/project/_git/repo/pullrequest/42')!;
+const context: PrContext = { scope: { route, projectId: 'p', repositoryId: 'r', userId: 'u' }, user: { id: 'u', displayName: 'Reviewer' }, sourceCommit: 's', targetCommit: 't', latestIteration: 2 };
+const draft: Draft = { id: 'd', scope: context.scope, body: 'Not the frozen snapshot', state: 'sending', revision: 2, createdAt: '', updatedAt: '', anchor: { kind: 'general', editorKey: 'general', pageUrl: route.prUrl, sourceCommit: 's', targetCommit: 't' }, submission: { body: 'Frozen café 🧵', startedAt: '', knownCommentIds: [] } };
+afterEach(() => vi.unstubAllGlobals());
+describe('explicit publication', () => {
+  it('posts the frozen snapshot to this PR using the existing browser session', async () => {
+    const send = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', send);
+    await postDraft(draft, context, []);
+    const [url, options] = send.mock.calls[0]!;
+    expect(url).toBe('https://dev.azure.com/org/project/_apis/git/repositories/r/pullRequests/42/threads?api-version=7.1');
+    expect(options.credentials).toBe('same-origin');
+    expect(JSON.parse(options.body)).toEqual({ comments: [{ content: 'Frozen café 🧵', parentCommentId: 0, commentType: 1 }], status: 1 });
+  });
+  it('replies inside the original discussion without changing its status', async () => {
+    const send = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', send);
+    const threads: RemoteThread[] = [{ id: 7, comments: [{ id: 1, content: 'Original', publishedDate: '', author: context.user }] }];
+    await postDraft({ ...draft, anchor: { ...draft.anchor, kind: 'reply', threadId: 7 } }, context, threads);
+    const [url, options] = send.mock.calls[0]!;
+    expect(url).toContain('/threads/7/comments?');
+    expect(JSON.parse(options.body)).toEqual({ content: 'Frozen café 🧵', parentCommentId: 1, commentType: 1 });
+  });
+  it('keeps the captured left/right selection and iteration context', async () => {
+    const send = vi.fn().mockResolvedValue(new Response('{}'));
+    vi.stubGlobal('fetch', send);
+    await postDraft({ ...draft, anchor: { ...draft.anchor, kind: 'inline', filePath: '/src/a.ts', side: 'left', start: { line: 3, offset: 1 }, end: { line: 4, offset: 5 }, firstIteration: 1, secondIteration: 2, changeTrackingId: 9 } }, context, []);
+    const body = JSON.parse(send.mock.calls[0]![1].body);
+    expect(body.threadContext).toEqual({ filePath: '/src/a.ts', leftFileStart: { line: 3, offset: 1 }, leftFileEnd: { line: 4, offset: 5 } });
+    expect(body.pullRequestThreadContext).toEqual({ changeTrackingId: 9, iterationContext: { firstComparingIteration: 1, secondComparingIteration: 2 } });
+  });
+  it('does not send stale code or another account snapshot', async () => {
+    const send = vi.fn(); vi.stubGlobal('fetch', send);
+    await expect(postDraft({ ...draft, scope: { ...draft.scope, userId: 'other' } }, context, [])).rejects.toThrow();
+    await expect(postDraft({ ...draft, anchor: { ...draft.anchor, kind: 'inline', sourceCommit: 'old' } }, context, [])).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('never retries an ambiguous network failure', async () => {
+    const send = vi.fn().mockRejectedValue(new TypeError('Connection lost')); vi.stubGlobal('fetch', send);
+    await expect(postDraft(draft, context, [])).rejects.toThrow('Connection lost');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
