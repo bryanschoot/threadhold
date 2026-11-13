@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Threadhold — drafts in de Azure DevOps-commenteditor</title>
+  <style>
+    :root { color-scheme: light; --fg: #242424; --muted: #616161; --border: #dedede; --surface: #f5f5f5; --paper: #fff; --accent: #0078d4; --accent-wash: #edf6fc; --warning: #805500; --success: #107c10; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.55 "Segoe UI", system-ui, sans-serif; color: var(--fg); background: var(--paper); }
+    main { max-width: 1180px; margin: auto; padding: 48px 28px; }
+    h1,h2,h3,p { margin: 0; }
+    h1 { font-size: clamp(30px,5vw,48px); line-height: 1.2; letter-spacing: -.025em; margin: 12px 0; }
+    h2 { font-size: 24px; line-height: 1.3; margin: 8px 0 18px; }
+    h3 { font-size: 15px; margin-bottom: 8px; }
+    p,li,code { overflow-wrap: anywhere; }
+    a { color: var(--accent); }
+    .muted { color: var(--muted); }
+    .eyebrow { text-transform: uppercase; letter-spacing: .1em; font-size: 11px; font-weight: 600; color: var(--muted); }
+    .intro { max-width: 780px; font-size: 18px; margin-bottom: 20px; }
+    .tag { display: inline-block; font-size: 11px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; }
+    .extension { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+    .note { background: var(--surface); border-left: 3px solid var(--accent); padding: 14px 18px; margin: 24px 0 38px; }
+    section { margin-top: 38px; }
+    .mock { border: 1px solid var(--border); border-radius: 5px; overflow: hidden; margin-top: 20px; }
+    .browserline { padding: 10px 18px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .adohead { padding: 20px 24px 0; border-bottom: 1px solid var(--border); }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .between { justify-content: space-between; }
+    .prtitle { font-size: 23px; font-weight: 600; margin: 10px 0 6px; }
+    .tabs { display: flex; gap: 24px; margin-top: 18px; font-size: 13px; }
+    .tab { padding: 10px 0; }
+    .active { border-bottom: 2px solid var(--accent); font-weight: 600; }
+    .page { display: grid; grid-template-columns: minmax(0,1fr); }
+    .page > *,.row > * { min-width: 0; }
+    .diff { padding: 24px; }
+    .filename { font-size: 12px; font-weight: 600; margin-bottom: 14px; }
+    .code { border: 1px solid var(--border); background: var(--surface); padding: 12px 16px; font: 12px/1.9 Consolas,monospace; overflow-x: auto; white-space: pre; }
+    .comment { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 12px; margin-top: 22px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; }
+    .avatar { border-radius: 50%; width: 26px; height: 26px; color: var(--paper); background: var(--accent); text-align: center; font-size: 10px; line-height: 26px; }
+    textarea { display: block; width: 100%; min-height: 110px; background: var(--paper); color: var(--fg); border: 1px solid var(--accent); box-shadow: 0 0 0 1px var(--accent); padding: 10px 12px; font: inherit; resize: vertical; }
+    .toolbar { color: var(--accent); word-spacing: 13px; padding: 8px 0; font-size: 16px; }
+    .actions { justify-content: flex-end; margin-top: 10px; gap: 8px; }
+    button { font: 600 12px "Segoe UI",sans-serif; border: 1px solid var(--border); border-radius: 2px; background: var(--surface); color: var(--fg); padding: 8px 12px; }
+    button:disabled { cursor: default; opacity: 1; }
+    .primary { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+    .added { border: 1px solid var(--accent); background: var(--accent-wash); color: var(--accent); }
+    .local { font-size: 11px; color: var(--accent); margin-top: 12px; }
+    .saved-draft { border-left: 3px solid var(--accent); }
+    .comment-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-bottom: 12px; }
+    .callout { padding: 16px 22px; border-top: 1px solid var(--border); font-size: 12px; }
+    .cards { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; }
+    .card { border: 1px solid var(--border); padding: 20px; border-radius: 4px; }
+    .card p { font-size: 13px; color: var(--muted); }
+    ol { padding-left: 22px; }
+    li { padding: 5px 0; }
+    footer { border-top: 1px solid var(--border); margin-top: 38px; padding-top: 18px; font-size: 12px; color: var(--muted); }
+    @media (prefers-color-scheme: dark) {
+      :root { color-scheme: dark; --fg: #eee; --muted: #b5b5b5; --border: #484848; --surface: #252525; --paper: #1b1b1b; --accent: #69baff; --accent-wash: #163247; --warning: #e9bd68; --success: #85cf85; }
+      .primary,.avatar { color: #14202a; }
+    }
+    @media (max-width: 760px) {
+      main { padding: 28px 16px; }
+      .page,.cards { grid-template-columns: minmax(0,1fr); }
+      .diff { padding: 16px 12px; }
+      .adohead { padding: 16px 16px 0; }
+      .comment { padding: 12px 8px; grid-template-columns: minmax(0,1fr); }
+      .avatar { display: none; }
+      .actions { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Browserextensie · productplan</p>
+    <h1>Threadhold</h1>
+    <p class="intro">Een draftknop in de Azure DevOps-commenteditor.<br>Dezelfde pagina. Dezelfde editor. Nog niet gepubliceerd.</p>
+    <div class="row"><span class="tag">Chrome + Edge · Manifest V3</span><span class="tag">Geen losse app of lokale server</span><a href="https://github.com/bryanschoot/threadhold">bryanschoot/threadhold · privé</a></div>
+  </header>
+  <aside class="note"><strong>Statische schets, geen werkende extensie.</strong> Alle gegevens zijn fictief; productknoppen zijn uitgeschakeld. Het ontwerp vult de native editor aan, niet een apart reviewdashboard. Blauw gemarkeerde draftcontrols zijn de toevoegingen van Threadhold.</aside>
+
+  <section aria-labelledby="sketch">
+    <p class="eyebrow">Direct op de bestaande PR-pagina</p>
+    <h2 id="sketch">Drafts verschijnen als comments op dezelfde plek</h2>
+    <div class="mock">
+      <div class="browserline">dev.azure.com / example-org / Demo / _git / orders / pullrequest / 123</div>
+      <div class="adohead">
+        <p class="muted" style="font-size:12px">Repos / Pull requests / !123</p>
+        <div class="row between"><div><p class="prtitle">Validate order input</p><p class="muted" style="font-size:12px">Active · feature/validation → main · fictieve PR</p></div><button class="added" disabled>Drafts (1) · Threadhold</button></div>
+        <div class="tabs"><span class="tab">Overview</span><span class="tab active">Files</span><span class="tab">Updates</span><span class="tab">Commits</span></div>
+      </div>
+      <div class="page">
+        <div class="diff">
+          <p class="filename">/src/order.ts · rechterzijde · regel 42</p>
+          <div class="code" aria-label="Fictieve codecontext">39  export function total(order) {
+40    const amount = order.amount;
+41    validateAmount(amount);
+42    return amount * order.count;
+43  }</div>
+          <article class="comment" aria-label="Voorbeeld van een gepubliceerde comment">
+            <span class="avatar" aria-hidden="true">RA</span>
+            <div><div class="comment-meta"><strong>Reviewer A</strong><span class="muted">Gepubliceerde comment · voorbeeld</span></div><p>Moet de controle op amount niet vóór de berekening staan?</p></div>
+          </article>
+          <article class="comment saved-draft" aria-label="Lokale draft als volledige commentkaart">
+            <span class="avatar" aria-hidden="true">BS</span>
+            <div>
+              <div class="comment-meta"><strong>Bryan Schoot</strong><span class="tag extension">Draft · alleen voor jou</span></div>
+              <p>Kan <code>order</code> hier null zijn? Valideer het object voordat je de velden leest.</p>
+              <p class="muted" style="font-size:11px;margin-top:10px">Lokaal opgeslagen · ID d_7f2 · revisie 3 · fictief</p>
+              <div class="row actions"><button class="added" disabled>Bewerken</button><button disabled>Draft verwijderen</button></div>
+            </div>
+          </article>
+          <div class="comment">
+            <span class="avatar" aria-hidden="true">BS</span>
+            <div>
+              <label for="native-comment" class="muted" style="display:block;font-size:11px;margin-bottom:8px">Bestaande Azure DevOps-commenteditor · schematisch</label>
+              <textarea id="native-comment" readonly>Kunnen we negatieve aantallen ook expliciet afwijzen?</textarea>
+              <p class="muted" style="font-size:11px;margin-top:7px">Markdown supported. Drag &amp; drop, paste, or select files to insert.</p>
+              <div class="toolbar" aria-hidden="true">@ # B <i>I</i> &lt;/&gt; ↗ ≡</div>
+              <div class="row actions"><button class="added" disabled>Opslaan als draft</button><button disabled>Cancel</button><button class="primary" disabled>Comment</button></div>
+              <p class="local">Threadhold bewaart de draft alleen in dit browserprofiel. Comment blijft publiceren.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="callout"><strong>De draft staat tussen de gewone comments, op zijn eigen locatie.</strong> Bewerken opent dezelfde native editor met “Draft bijwerken”. De PR-knop Drafts is alleen navigatie. Publiceren blijft een afzonderlijke native Comment/Reply-actie.</div>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:12px">Vormgeving gebaseerd op <a href="https://learn.microsoft.com/en-us/azure/devops/repos/git/media/review-pull-requests/2022/files-tab-comment-box-lrg.png">Microsofts gepubliceerde native commenteditor</a>. Schematische pagina, geen screenshot van een ingelogde omgeving.</p>
+  </section>
+
+  <section aria-labelledby="technical">
+    <p class="eyebrow">Technische richting</p>
+    <h2 id="technical">Een dunne laag bovenop DevOps</h2>
+    <div class="cards">
+      <article class="card"><h3>Native editor behouden</h3><p>Een geïsoleerd content script voegt draftcontrols toe. Azure DevOps houdt zijn eigen Markdown, mentions en publicatieknop. Geen editor nabouwen.</p></article>
+      <article class="card"><h3>Lokaal en duurzaam</h3><p>De extension service worker bewaart drafts in extension-origin IndexedDB. Stabiele IDs, revisies en transacties beschermen tegen conflicten tussen tabs. Geen sync of PAT.</p></article>
+      <article class="card"><h3>Agent-CRUD in de browser</h3><p>De agent gebruikt dezelfde echte knoppen en native tekstvelden. Stabiele labels, draft-IDs en zichtbare save-resultaten. Vereist browsertoegang met de extensie geïnstalleerd.</p></article>
+    </div>
+  </section>
+
+  <section aria-labelledby="existence">
+    <h2 id="existence">Bestaande oplossingen, geen bewezen exacte match</h2>
+    <p>Native private draft-CRUD is niet aangetroffen in de onderzochte Microsoft-contracten. <a href="https://github.com/vinaychandra/vscode-pr-azdo">vscode-pr-azdo</a> en <a href="https://github.com/agavra/tuicr">tuicr</a> bieden lokale concepten, maar niet in de gekozen browser-only vorm. <a href="https://github.com/unimorphic/DevOpsPrView">DevOps PR View</a> en <a href="https://github.com/chienyuanchang/rich-diff-comments">Markdown PR</a> bewijzen bestaande browserintegraties, niet de volledige gevraagde draft-lifecycle.</p>
+    <p class="muted" style="margin-top:12px;font-size:12px">“pending” is een afhandelstatus van een discussie, geen private draftstatus. De conclusie is een documentatiebevinding, geen bewijs dat nergens een vergelijkbare extensie bestaat.</p>
+  </section>
+
+  <section aria-labelledby="execution">
+    <p class="eyebrow">Implementatieplan</p>
+    <h2 id="execution">Eerst de echte editorintegratie bewijzen</h2>
+    <ol>
+      <li><strong>Integratieproef:</strong> actuele DOM, accountcontext, inline/reply-anchors, native submit en succesdetectie vaststellen op een toegestane PR.</li>
+      <li><strong>Draft-CRUD:</strong> MV3-extensie, IndexedDB en save/read/edit/delete direct op de bestaande commenteditors.</li>
+      <li><strong>Robuustheid:</strong> SPA-navigatie, meerdere tabs, browserherstart, agentbediening en stale-locaties.</li>
+      <li><strong>Publicatieafronding:</strong> native submitguard, bewezen remote succes en behoud van drafts bij fouten/onzekere uitkomst.</li>
+      <li><strong>Distributie:</strong> Chrome/Edge-pakket, permissions- en privacydocumentatie; store-publicatie afzonderlijk regelen.</li>
+    </ol>
+    <aside class="note" style="margin-bottom:0"><strong>Belangrijkste grenzen:</strong> de native DOM kan veranderen; lokale drafts zijn niet automatisch versleuteld; zodra tekst in de pagina staat kan paginacode die lezen. Draft-save verstuurt geen comment. Na een onzekere publicatie wordt nooit automatisch opnieuw gepost.</aside>
+  </section>
+  <footer>Opgeleverd: onderzoek, implementatieplan en deze statische schets. Nog geen extensie geïnstalleerd of gebouwd. Volledige bronnen en acceptatiecriteria staan in <code>docs/</code> van de repository. Ontwerprichting: de bestaande Azure DevOps-editor, niet een eigen huisstijl.</footer>
+</main>
+</body>
+</html>
