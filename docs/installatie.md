@@ -33,6 +33,7 @@ De extensie volgt `navigator.language` van de browser. Engels is de standaard en
 | Edit / Save / Cancel | Bewerken / Opslaan / Annuleren |
 | Delete draft | Draft verwijderen |
 | Publish drafts (n) | Drafts plaatsen (n) |
+| Draft help | Drafthulp |
 
 Onderstaande stappen gebruiken Nederlandse extensielabels. Native **Cancel** kan, afhankelijk van Azure DevOps, Engels blijven.
 
@@ -53,7 +54,7 @@ Azure DevOps biedt geen stabiel contract voor deze DOM-uitbreiding. Onbekende of
 
 ## Browseragents
 
-Een agent gebruikt dezelfde zichtbare knoppen. Geen CLI, MCP-server of lokale poort nodig. Wacht op het live-statusbericht na een actie, niet op een vaste sleep.
+Een agent begint bij **Draft help / Drafthulp** naast de PR-acties. Die ingebouwde, toegankelijke dialoog is de bron voor de CRUD-procedure, controleerbare opslagresultaten en de veilige standaardinstructie: alleen lokale drafts, publiceren uitsluitend op expliciet verzoek. Geen repositorykennis, CLI, MCP-server of lokale poort nodig.
 
 | Actie | Control |
 | --- | --- |
@@ -65,6 +66,8 @@ Een agent gebruikt dezelfde zichtbare knoppen. Geen CLI, MCP-server of lokale po
 | Publicatie controleren | `data-threadhold-action="check"` |
 
 Kaarten en gekoppelde controls hebben `data-threadhold-draft-id` en `data-threadhold-revision`. Zoek controls binnen de bedoelde kaart/editor. Agent-CRUD gebruikt de draftacties; alleen bij een geopende **draftbewerking** is Ctrl+Enter lokaal. Gebruik die sneltoets niet in een gewone nieuwe commenteditor: daar blijft Azure DevOps zelf publiceren. Dit is geen sandbox tegen willekeurige native acties.
+
+Wacht op de resulterende kaart, hogere revisie of verwijdering, niet op een vaste sleep of alleen een geslaagde klik. Kaarten geven `data-threadhold-state` aan; live-statusmeldingen hebben `data-threadhold-status` en `role=status/alert`, bezette bediening `aria-busy`. Bij ontbrekende draftcontrols of onbekende publicatiestatus stopt de agent en meldt dit, zonder native publicatie als fallback.
 
 ## Privacy en herstel
 
@@ -80,6 +83,8 @@ Kaarten en gekoppelde controls hebben `data-threadhold-draft-id` en `data-thread
 - Eerder zijn 38 unittests en 7 browsercases uitgevoerd en geslaagd.
 - De herstelronde voor inline/split is geverifieerd met typecheck, productiebuild en zes gerichte browsercases: enkele en meerregelige comments, inline rechts en split links/rechts. Elke case controleert opslag, refresh, native heropenen met verborgen gutterknop, lokale bewerking en het exacte publicatiepayload tegen een fixture.
 - De browsercases laden de echte unpacked extensie in een geïsoleerd profiel. Ze bewijzen geen stabiel Azure DevOps-DOM-contract.
+- Draft help is geverifieerd met typecheck, productiebuild en vier gerichte browsercases: lokale CRUD in Nederlands/Engels, vertaalde hulp, focusherstel via Escape en opnieuw gemounte PR-header zonder dubbele dialoog. De echte extensiedialoog is visueel gecontroleerd in de synthetische host; de host bevat geen volledige Azure DevOps-styling.
+- Een verse browseragent zonder repositorykennis ontdekte Draft help en voerde lokale CRUD uit: hetzelfde draft-ID bleef na refresh behouden, bewerking verhoogde revisie 1 naar 2 en bevestigde verwijdering liet geen kaart achter. Onafhankelijke netwerkregistratie telde nul schrijfverzoeken; de oorspronkelijke remote opmerking bleef zichtbaar. De gevonden ambiguïteit tussen de verwijderknop en zijn verborgen bevestiging is in de hulp verduidelijkt.
 - In echte Azure DevOps zijn native lettertype/padding, lokale replybewerking, Engelse draftacties, tijdelijke thread-ID's anders dan -1 en meerregelige bindings links/rechts gecontroleerd. Een lokale linkerdraft bleef na refresh zichtbaar. Alleen de eigen proefdrafts zijn lokaal verwijderd.
 - De laatste live potloodcontrole kon niet worden afgerond: de pagina bleef een eerdere Monaco-bundel laden, ook na de gemelde extensieherlaadactie. De nieuwere heropeningsfix is uitsluitend door de zes gerichte browsercases geverifieerd.
 - Er zijn geen echte Azure DevOps-comments gepubliceerd voor deze verificatie. Live serverpublicatie en store-installatie worden niet als geverifieerd geclaimd.

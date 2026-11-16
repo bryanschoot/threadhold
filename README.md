@@ -17,6 +17,8 @@ De interface volgt de browsertaal: Engels standaard, Nederlands voor `nl`-locale
 
 Dit geldt voor inline comments, algemene PR-comments en replies. Een agent voert create/read/update/delete uit via dezelfde browserbediening, met stabiele labels en draft-IDs. Er is geen afzonderlijke agent-CLI nodig; een shellagent zonder browsertoegang kan deze extensie niet bedienen.
 
+Open **Draft help / Drafthulp** naast de PR-acties voor de ingebouwde browseragentinstructies, opslagbevestiging en de grens tussen lokale drafts en publicatie. De hulp werkt ook zonder repositorykennis.
+
 ## Bestaat dit al?
 
 Azure DevOps documenteert gewone comment-CRUD, maar geen private draft-reviewinterface. `pending` is geen privacygarantie. VS Code- en terminaltools bieden wel lokale concepten, maar passen niet bij de gekozen browser-only workflow.

@@ -11,4 +11,5 @@
 - Herstelde draftknoppen voor alle negatieve native thread-ID's, enkele en meerregelige selecties en beide kanten van split view.
 - Anonieme originele Monaco-modellen worden uitsluitend via hun eigen commit-gecontroleerde diffpartner gekoppeld. Native heropenen gebruikt de zichtbare selectieknop en behoudt ook ingeklapte anchors.
 - Drafts plaatsen naast Approve, met bevestiging, duurzaam publicatiejournal en verificatie van remote IDs. Geen automatische retry, approve of resolve.
+- Ingebouwde Engelse/Nederlandse Draft help met lokale browseragent-CRUD, controleerbare opslagresultaten en expliciete publicatiegrens; toegankelijk via toetsenbord en schermlezer.
 - Unpacked distributie; geen gepubliceerde Chrome/Edge-storelisting.

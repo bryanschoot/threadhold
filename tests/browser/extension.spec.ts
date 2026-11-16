@@ -306,3 +306,33 @@ test('English browser gets English draft actions and native editing', async () =
   await expect(card).toHaveCount(0);
   expect(writes).toBe(0);
 });
+
+for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} draft help is discoverable, keyboard accessible and survives header remount`, async () => {
+  const label = en ? 'Draft help' : 'Drafthulp';
+  const help = page.getByRole('button', { name: label, exact: true });
+  await help.click();
+  const dialog = page.getByRole('dialog', { name: label, exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(en ? 'only when the user explicitly asks you to publish' : 'alleen wanneer de gebruiker expliciet om publicatie vraagt');
+  await expect(dialog).toContainText(en ? 'do not fall back to publishing' : 'val niet terug op publiceren');
+  const close = dialog.getByRole('button', { name: en ? 'Close' : 'Sluiten', exact: true });
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect(help).toBeFocused();
+  // Native SPA navigation can replace the header without changing the PR.
+  await page.locator('.repos-pr-header-vote-button').evaluate(button => {
+    const replacement = button.cloneNode(true);
+    button.parentElement!.querySelectorAll('.th-publish,.th-help-button').forEach(control => control.remove());
+    button.replaceWith(replacement);
+  });
+  await expect(help).toBeVisible();
+  await help.click();
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('.th-help')).toHaveCount(1);
+  await dialog.getByText(en ? 'Browser-agent controls' : 'Bediening voor browseragents', { exact: true }).click();
+  await expect(dialog.locator('pre')).toBeVisible();
+  await close.click();
+  await expect(dialog).not.toBeVisible();
+  expect(writes).toBe(0);
+});

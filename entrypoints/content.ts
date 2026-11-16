@@ -4,7 +4,7 @@ import { scopeKey, type Draft, type DraftRequest, type DraftResult, type Extensi
 import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import { discoverEditors, findDraftLocation, openDraftEditor, readEditor, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
-import { createDraftCard, createPublishControl, createSaveControl, type DraftUiActions, type SaveControl } from '../src/ui';
+import { createDraftCard, createDraftHelp, createPublishControl, createSaveControl, type DraftUiActions, type SaveControl } from '../src/ui';
 import { postDraft } from '../src/ado-publish';
 import { readMonacoBindings, syncMonacoDraftSlots, type MonacoBinding } from '../src/monaco-client';
 import { t } from '../src/i18n';
@@ -23,6 +23,7 @@ export default defineContentScript({
     let generation = 0;
     let refreshing = false;
     let publishControl: HTMLButtonElement | undefined;
+    let draftHelp: ReturnType<typeof createDraftHelp> | undefined;
     let batchPublishing = false;
     let notice: HTMLElement | undefined;
     const editors = new Map<HTMLTextAreaElement, EditorState>();
@@ -36,9 +37,13 @@ export default defineContentScript({
       const page = document.querySelector('.repos-pr-details-page');
       if (!page) return;
       if (!notice?.isConnected) {
-        notice = document.createElement('p'); notice.className = 'th-save'; notice.setAttribute('role', 'status');
+        notice = document.createElement('p'); notice.className = 'th-save';
+        notice.dataset.threadholdStatus = '';
+        notice.setAttribute('aria-atomic', 'true');
         page.querySelector('.page-content')?.prepend(notice);
       }
+      notice.setAttribute('role', error ? 'alert' : 'status');
+      notice.setAttribute('aria-live', error ? 'assertive' : 'polite');
       notice.textContent = `Threadhold: ${message}`;
       notice.dataset.error = String(error);
     }
@@ -64,6 +69,7 @@ export default defineContentScript({
       editors.clear();
       for (const card of cards.values()) card.remove();
       cards.clear(); publishControl?.remove(); publishControl = undefined; notice?.remove(); notice = undefined;
+      draftHelp?.dispose(); draftHelp = undefined;
       drafts = []; context = undefined; threads = [];
       monacoBindings = []; monacoSignature = '';
     }
@@ -156,6 +162,8 @@ export default defineContentScript({
       });
       publishControl.disabled ||= batchPublishing;
       document.querySelector('.repos-pr-header-vote-button')?.after(publishControl);
+      draftHelp ??= createDraftHelp();
+      if (publishControl.isConnected) publishControl.after(draftHelp.button);
       for (const card of cards.values()) card.remove();
       cards.clear();
       const feed = document.querySelector<HTMLElement>('.activity-feed-list');
@@ -288,6 +296,7 @@ export default defineContentScript({
           controls.report(t('Saved', 'Opgeslagen'));
           finishEditing(state, true);
           await refresh();
+          show(t(`Draft saved locally · revision ${result.draft.revision}.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}.`));
         });
         const state: EditorState = { editor, controls, requestId: crypto.randomUUID(), editing: false, dispose() {
           editor.root.removeEventListener('click', onClick, true); editor.root.removeEventListener('keydown', onKey, true);
@@ -359,13 +368,13 @@ export default defineContentScript({
     }
     let scheduled = false;
     const observer = new MutationObserver((records) => {
-      if (scheduled || records.every(record => record.target instanceof Element && record.target.closest('.th-card,.th-save,.th-publish'))) return;
+      if (scheduled || records.every(record => record.target instanceof Element && record.target.closest('.th-card,.th-save,.th-publish,.th-help,.th-help-button'))) return;
       scheduled = true;
       ctx.requestAnimationFrame(() => {
         scheduled = false;
         mountEditors();
         scheduleMonaco();
-        if (context && ((!publishControl?.isConnected && document.querySelector('.repos-pr-header-vote-button')) || drafts.some(draft => !cards.get(draft.id)?.isConnected && (findDraftLocation(draft, threads) || document.querySelector('.activity-feed-list'))))) render();
+        if (context && (((!publishControl?.isConnected || !draftHelp?.button.isConnected) && document.querySelector('.repos-pr-header-vote-button')) || drafts.some(draft => !cards.get(draft.id)?.isConnected && (findDraftLocation(draft, threads) || document.querySelector('.activity-feed-list'))))) render();
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });

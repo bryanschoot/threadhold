@@ -10,7 +10,7 @@ export interface DraftUiActions {
   reset(draft: Draft): void | Promise<void>;
 }
 
-type Action = 'save' | 'edit' | 'delete' | 'locate' | 'check' | 'reanchor' | 'reset';
+type Action = 'save' | 'edit' | 'delete' | 'locate' | 'check' | 'reanchor' | 'reset' | 'help';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -39,6 +39,7 @@ function actionButton(label: string, action: Action, draft?: Draft): HTMLButtonE
 
 function liveStatus(): HTMLElement {
   const status = element('p', 'th-status');
+  status.dataset.threadholdStatus = '';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   status.setAttribute('aria-atomic', 'true');
@@ -121,6 +122,7 @@ function iconButton(label: string, action: 'edit' | 'delete', icon: 'Edit' | 'De
 export function createDraftCard(draft: Draft, author: string, stale: boolean, actions: DraftUiActions): HTMLElement {
   const card = element('article', 'th-card repos-comment-viewer');
   card.dataset.threadholdCard = '';
+  card.dataset.threadholdState = draft.state;
   bindDraft(card, draft);
   card.setAttribute('aria-label', t(`Draft by ${author}`, `Draft van ${author}`));
   const comment = element('div', 'repos-discussion-comment flex-column');
@@ -346,4 +348,59 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
       report(status, saved ? t('Saved', 'Opgeslagen') : message, error);
     },
   };
+}
+
+export function createDraftHelp(): { button: HTMLButtonElement; dispose(): void } {
+  const button = actionButton(t('Draft help', 'Drafthulp'), 'help');
+  button.classList.add('th-help-button');
+  button.setAttribute('aria-haspopup', 'dialog');
+  const dialog = element('dialog', 'th-help');
+  const title = element('h2', '', t('Draft help', 'Drafthulp'));
+  title.id = 'threadhold-help-title';
+  dialog.setAttribute('aria-labelledby', title.id);
+  const intro = element('p', '', t(
+    'Threadhold keeps drafts private in this browser profile, for the current account and pull request. Refreshing the page keeps saved drafts.',
+    'Threadhold bewaart drafts privé in dit browserprofiel, voor het huidige account en de huidige pull request. Opgeslagen drafts blijven na verversen behouden.',
+  ));
+  const instruction = element('blockquote', '', t(
+    'Agent instruction: create, read, edit and delete local drafts only. Publish drafts only when the user explicitly asks you to publish.',
+    'Agentinstructie: maak, lees, bewerk en verwijder alleen lokale drafts. Publiceer drafts alleen wanneer de gebruiker expliciet om publicatie vraagt.',
+  ));
+  const steps = element('ol', '');
+  const items = [
+    t('Create: open a normal comment or reply editor, enter text and choose Save as draft. Wait for a Draft comment containing your text.', 'Maken: open een normale opmerking- of antwoordeditor, voer tekst in en kies Opslaan als draft. Wacht op een Draft-opmerking met je tekst.'),
+    t('Read: find Draft comments among the existing comments, not in a separate tab. After refreshing, verify the same draft ID and text.', 'Lezen: zoek Draft-opmerkingen tussen de bestaande opmerkingen, niet in een apart tabblad. Controleer na verversen hetzelfde draft-ID en dezelfde tekst.'),
+    t('Edit: choose the pencil on the draft, edit in the normal editor and choose Save. Verify the same draft ID, changed text and a higher revision. Cancel keeps the previous saved version.', 'Bewerken: kies het potlood bij de draft, wijzig de tekst in de normale editor en kies Opslaan. Controleer hetzelfde draft-ID, de gewijzigde tekst en een hogere revisie. Annuleren behoudt de vorige opgeslagen versie.'),
+    t('Delete: choose the trash icon on the draft, then Yes, delete draft. Wait until that draft is absent. Existing Azure DevOps comments are unchanged.', 'Verwijderen: kies de prullenbak bij de draft en daarna Ja, draft verwijderen. Wacht totdat die draft verdwenen is. Bestaande Azure DevOps-opmerkingen blijven ongewijzigd.'),
+  ];
+  for (const item of items) steps.append(element('li', '', item));
+  const safety = element('p', '', t(
+    'In a new editor, Comment, Reply, Reply & resolve and Ctrl+Enter can publish immediately: use Save as draft instead. If draft controls are missing or publication status is unknown, stop and report it; do not fall back to publishing.',
+    'In een nieuwe editor kunnen Comment, Reply, Reply & resolve en Ctrl+Enter direct publiceren: gebruik Opslaan als draft. Ontbreken draftknoppen of is de publicatiestatus onbekend, stop dan en meld dit; val niet terug op publiceren.',
+  ));
+  const details = element('details', '');
+  details.append(element('summary', '', t('Browser-agent controls', 'Bediening voor browseragents')));
+  const selectors = element('p', '', t(
+    'Use accessible button names, or these stable DOM attributes. Scope edit/delete actions to the intended draft card. A click is not a storage confirmation: wait for the resulting card, revision or removal. Status messages use data-threadhold-status and role=status/alert; busy controls expose aria-busy.',
+    'Gebruik toegankelijke knopnamen of deze stabiele DOM-attributen. Beperk bewerk- en verwijderacties tot de bedoelde draftkaart. Een klik is geen opslagbevestiging: wacht op de resulterende kaart, revisie of verwijdering. Statusmeldingen gebruiken data-threadhold-status en role=status/alert; bezette bediening gebruikt aria-busy.',
+  ));
+  const attributes = element('pre', '');
+  attributes.textContent = '[data-threadhold-card]\n  data-threadhold-draft-id: stable ID\n  data-threadhold-revision: saved revision\n  data-threadhold-state: saved | sending | unknown\n  .th-body: saved text\n[data-threadhold-action="save"]\n[data-threadhold-action="edit"]\n[data-threadhold-action="delete"]';
+  const deletion = element('p', '', t(
+    'Both the trash button and its initially hidden confirmation use the delete action. Choose the visible, named Delete draft button, then Yes, delete draft; do not click an unfiltered delete selector.',
+    'De prullenbak en de aanvankelijk verborgen bevestiging gebruiken beide de delete-actie. Kies de zichtbare knop Draft verwijderen en daarna Ja, draft verwijderen; klik niet op een ongefilterde delete-selector.',
+  ));
+  const shortcut = element('p', '', t(
+    'Ctrl+Enter saves locally only while editing an existing draft. Publish drafts opens a separate confirmation; this help is not authorization to publish.',
+    'Ctrl+Enter slaat alleen lokaal op tijdens het bewerken van een bestaande draft. Drafts plaatsen opent een aparte bevestiging; deze hulp is geen toestemming om te publiceren.',
+  ));
+  details.append(selectors, attributes, deletion, shortcut);
+  const close = element('button', 'bolt-button enabled bolt-focus-treatment', t('Close', 'Sluiten'));
+  close.type = 'button';
+  close.autofocus = true;
+  close.addEventListener('click', () => dialog.close());
+  button.addEventListener('click', () => { if (!dialog.open) dialog.showModal(); });
+  dialog.append(title, intro, instruction, steps, safety, details, close);
+  document.body.append(dialog);
+  return { button, dispose() { dialog.close(); dialog.remove(); button.remove(); } };
 }

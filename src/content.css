@@ -109,3 +109,54 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
+
+.th-help-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin-inline-start: 8px;
+}
+
+.th-help {
+  box-sizing: border-box;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--palette-black-alpha-20, #ccc);
+  border-radius: 4px;
+  background: var(--background-color, #fff);
+  color: var(--text-primary-color, #242424);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.th-help h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.th-help blockquote {
+  margin-inline: 0;
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--communication-background, #0078d4);
+}
+
+.th-help li + li {
+  margin-block-start: 8px;
+}
+
+.th-help summary {
+  cursor: pointer;
+}
+
+.th-help pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.th-help > button {
+  float: inline-end;
+  margin-block-start: 16px;
+}
