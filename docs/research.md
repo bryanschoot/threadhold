@@ -1,65 +1,65 @@
-# Onderzoek: browserextensie voor Azure DevOps-draftcomments
+# Research: a browser extension for Azure DevOps draft comments
 
-Onderzoeksdatum: 13 november 2026. De gebruiker heeft de vorm expliciet gekozen: **alleen een browserextensie die de bestaande Azure DevOps-commenteditor uitbreidt**. Geen losse review-app of CLI.
+Research date: November 13, 2026. The user explicitly chose the delivery format: **a browser extension that extends the existing Azure DevOps comment editor, and nothing else**. No separate review app or CLI.
 
-## Antwoord
+## Findings
 
-**Niet native aangetoond; extern bestaan deeloplossingen.** In de onderzochte publieke Azure DevOps-contracten is geen private draft-commentresource met CRUD en een afzonderlijke submit-reviewoperatie aangetroffen. VS Code- en terminaltools bieden wel lokale drafts. Ook bestaan browserextensies voor Azure DevOps-reviews, maar de volledige gevraagde combinatie is in de onderzochte bronnen niet vastgesteld. Dit is geen bewijs van universele afwezigheid.
+**Not demonstrated natively; partial external solutions exist.** The public Azure DevOps contracts examined did not expose a private draft-comment resource with CRUD and a separate submit-review operation. VS Code and terminal tools do offer local drafts. Browser extensions for Azure DevOps reviews also exist, but the full requested combination was not established in the sources examined. This does not prove universal absence.
 
-## Native mogelijkheden
+## Native capabilities
 
-Microsoft documenteert comments, replies, edit/delete en votes. De handleiding laat de bestaande inline editor zien: tekst invoeren, daarna **Comment** kiezen. Een draft PR betreft de PR zelf, niet een privéreview van één reviewer. [Reviewhandleiding](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops), [draft PR](https://learn.microsoft.com/en-us/azure/devops/repos/git/pull-requests?view=azure-devops#create-draft-prs).
+Microsoft documents comments, replies, editing/deletion and votes. The guide shows the existing inline editor: enter text, then choose **Comment**. A draft PR concerns the PR itself, not one reviewer's private review. [Review guide](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops), [draft PR](https://learn.microsoft.com/en-us/azure/devops/repos/git/pull-requests?view=azure-devops#create-draft-prs).
 
-De threadstatus `pending` betekent: “The issue in this comment is under review and awaits something else.” Geen privacy- of publicatiestatus. [Commentstatus](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops#change-comment-status).
+The thread status `pending` means: “The issue in this comment is under review and awaits something else.” It is not a privacy or publication status. [Comment status](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops#change-comment-status).
 
-REST 7.1 biedt thread create/get/list/update en comment create/get/list/update/delete. Het model bevat `publishedDate`, `status`, `properties`, context en `isDeleted`, maar geen expliciete draft/private visibility. `properties` is geen toegangscontrole; delete is soft deletion. [Threads](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads?view=azure-devops-rest-7.1), [comments](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-thread-comments?view=azure-devops-rest-7.1), [modellen](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1).
+REST 7.1 provides thread create/get/list/update and comment create/get/list/update/delete. The model contains `publishedDate`, `status`, `properties`, context and `isDeleted`, but no explicit draft/private visibility. `properties` is not access control; deletion is soft deletion. [Threads](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads?view=azure-devops-rest-7.1), [comments](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-thread-comments?view=azure-devops-rest-7.1), [models](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1).
 
-Een zoekresultaat beweerde dat **Save all comments** een native private-reviewworkflow oplevert. Deze claim is **niet overgenomen**: de geraadpleegde Microsoft-handleiding beschrijft die functie niet en documenteert geen bijbehorende private resource. Onverzonden editortekst is evenmin een bewezen duurzaam agent-CRUD-contract.
+A search result claimed that **Save all comments** provides a native private-review workflow. That claim was **not adopted**: the Microsoft guide consulted does not describe the feature or document a corresponding private resource. Unsent editor text is not a proven durable agent-CRUD contract either.
 
-## Browseralternatieven
+## Browser alternatives
 
-| Oplossing | Aangetoonde functie | Niet aangetoond |
+| Solution | Demonstrated capability | Not demonstrated |
 | --- | --- | --- |
-| DevOps PR View | Browserextensie met aanvullende fullscreenknoppen, codezoom, comment-highlights en scrollverbeteringen | Duurzame private draftcomment-CRUD |
-| Markdown PR — Azure DevOps PR Comments | Commenten op gerenderde Markdown, inline threads, replies en edit/delete; gebruikt volgens de listing de bestaande sessie | Algemene duurzame draftlaag op alle native commenteditors met agent-CRUD |
-| assist | Browserknoppen voor agentworkflows; Azure DevOps checkout en address-comments | Browser-only private draftcomment-CRUD zonder lokale server |
+| DevOps PR View | Browser extension with additional fullscreen buttons, code zoom, comment highlights and scrolling improvements | Durable private draft-comment CRUD |
+| Markdown PR — Azure DevOps PR Comments | Comments on rendered Markdown, inline threads, replies and edit/delete; the listing says it uses the existing session | A general durable draft layer across all native comment editors with agent CRUD |
+| assist | Browser buttons for agent workflows; Azure DevOps checkout and address-comments | Browser-only private draft-comment CRUD without a local server |
 
-[DevOps PR View: README en broncode](https://github.com/unimorphic/DevOpsPrView), [Markdown PR: Web Store](https://chromewebstore.google.com/detail/markdown-pr-%E2%80%94-azure-devop/habbfnkhgmnkhlbakjlnapadamjijbdh), [Markdown PR: broncode](https://github.com/chienyuanchang/rich-diff-comments), [assist: eigen documentatie](https://staffordwilliams.com/assist/browser-extension/).
+[DevOps PR View: README and source](https://github.com/unimorphic/DevOpsPrView), [Markdown PR: Web Store](https://chromewebstore.google.com/detail/markdown-pr-%E2%80%94-azure-devop/habbfnkhgmnkhlbakjlnapadamjijbdh), [Markdown PR: source](https://github.com/chienyuanchang/rich-diff-comments), [assist: own documentation](https://staffordwilliams.com/assist/browser-extension/).
 
-Markdown PR vermeldt “without closing drafts” bij themewissels. Dat bewijst behoud van open editorstate, niet zelfstandig de gevraagde persistente create/read/update/delete-lifecycle na browserherstart. De listing is niet live functioneel getest.
+Markdown PR mentions “without closing drafts” when switching themes. This demonstrates preservation of open editor state, not independently the requested persistent create/read/update/delete lifecycle after a browser restart. The listing was not functionally tested live.
 
-## Andere omgevingen: bestaan wel, passen niet bij de keuze
+## Other environments: available, but outside the chosen format
 
-| Oplossing | Bevinding |
+| Solution | Finding |
 | --- | --- |
-| vscode-pr-azdo | Lokale draftcomments en replies; UI-edit/delete/publicatie; agent-create via VS Code language-modeltools. Volledige agent-list/update/delete niet vastgesteld |
-| pr-review-ai | Interne `DraftCommentManager` met list/add/edit/remove/clearAll en lokale persistentie; geen externe agent-CRUD-interface vastgesteld |
-| tuicr | Agentgerichte JSON-CLI met create/read/delete en lokale sessies; aparte update niet gedocumenteerd |
-| Microsoft Azure DevOps MCP / ado-axi | Tools voor gewone Azure DevOps-comments; geen private conceptbackend aangetroffen |
+| vscode-pr-azdo | Local draft comments and replies; UI edit/delete/publication; agent creation through VS Code language-model tools. Full agent list/update/delete not established |
+| pr-review-ai | Internal `DraftCommentManager` with list/add/edit/remove/clearAll and local persistence; no external agent-CRUD interface established |
+| tuicr | Agent-facing JSON CLI with create/read/delete and local sessions; separate update not documented |
+| Microsoft Azure DevOps MCP / ado-axi | Tools for ordinary Azure DevOps comments; no private draft backend found |
 
-[vscode-pr-azdo](https://github.com/vinaychandra/vscode-pr-azdo), [agenttoolregistratie](https://github.com/vinaychandra/vscode-pr-azdo/blob/HEAD/src/chat/copilotReviewTools.ts), [pr-review-ai CRUD](https://github.com/Munikumar09/pr-review-ai/blob/HEAD/src/review/DraftCommentManager.ts), [tuicr CLI](https://github.com/agavra/tuicr/blob/HEAD/docs/REVIEW_CLI.md), [tuicr Azure-beperkingen](https://github.com/agavra/tuicr/blob/HEAD/docs/AZURE.md), [Microsoft remote MCP](https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops#repos), [ado-axi PR-broncode](https://github.com/jeffreyhaen/ado-axi/blob/main/src/commands/pr.ts).
+[vscode-pr-azdo](https://github.com/vinaychandra/vscode-pr-azdo), [agent tool registration](https://github.com/vinaychandra/vscode-pr-azdo/blob/HEAD/src/chat/copilotReviewTools.ts), [pr-review-ai CRUD](https://github.com/Munikumar09/pr-review-ai/blob/HEAD/src/review/DraftCommentManager.ts), [tuicr CLI](https://github.com/agavra/tuicr/blob/HEAD/docs/REVIEW_CLI.md), [tuicr Azure limitations](https://github.com/agavra/tuicr/blob/HEAD/docs/AZURE.md), [Microsoft remote MCP](https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops#repos), [ado-axi PR source](https://github.com/jeffreyhaen/ado-axi/blob/main/src/commands/pr.ts).
 
-Belangrijk: tuicr documenteert dat `:submit draft` bij Azure DevOps gewone publicatie is. Dat commando is dus geen veilig alternatief voor lokale opslag.
+Important: tuicr documents that `:submit draft` on Azure DevOps performs ordinary publication. That command is therefore not a safe alternative to local storage.
 
-## Browserplatform: onderbouwing
+## Browser platform: supporting evidence
 
-- Content scripts kunnen de DOM lezen/uitbreiden en berichten naar de extensie sturen. Hun JavaScript draait standaard geïsoleerd, maar de DOM is gedeeld. Geen automatische privacygarantie voor tekst die op de pagina wordt getoond. [Content scripts](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts).
-- Web-storagegebruik vanuit een content script benadert de website-origin, niet de extensie-origin. IndexedDB in de extension service worker is wel extensieopslag; IndexedDB is daar beschikbaar. Daarom geen `window.localStorage` of page-origin IndexedDB voor drafts. [Storage and cookies](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies).
-- `chrome.storage.local` is lokaal; `sync` kan gegevens tussen browsers synchroniseren. Lokale data verdwijnt bij het verwijderen van de extensie. Gebruik `storage.local` alleen voor kleine instellingen; IndexedDB-transacties voor draftrevisies en meerdere tabs. [Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage).
-- Service workers kunnen stoppen; duurzame state hoort niet alleen in globals. [Lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle).
+- Content scripts can read/extend the DOM and send messages to the extension. Their JavaScript runs in isolation by default, but the DOM is shared. There is no automatic privacy guarantee for text displayed on the page. [Content scripts](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts).
+- Web storage used from a content script accesses the website origin, not the extension origin. IndexedDB in the extension service worker is extension storage; IndexedDB is available there. Therefore, do not use `window.localStorage` or page-origin IndexedDB for drafts. [Storage and cookies](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies).
+- `chrome.storage.local` is local; `sync` can synchronize data across browsers. Local data disappears when the extension is removed. Use `storage.local` only for small settings; use IndexedDB transactions for draft revisions and multiple tabs. [Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage).
+- Service workers can stop; durable state must not live only in globals. [Lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle).
 
-## Risico's voor uitgestelde publicatie
+## Risks of deferred publication
 
-Inline feedback gebruikt side, posities, diff-iteraties en `changeTrackingId`; een oud regelnummer opnieuw gebruiken kan de verkeerde code aanwijzen. De definitie noemt 1-based regels en 0-based offsets; effectieve selectie moet gericht worden bewezen. [Threadmodellen](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1), [iteration changes](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-iteration-changes/get?view=azure-devops-rest-7.1).
+Inline feedback uses a side, positions, diff iterations and `changeTrackingId`; reusing an old line number can point to the wrong code. The definition specifies 1-based lines and 0-based offsets; the effective selection must be demonstrated through targeted checks. [Thread models](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1), [iteration changes](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-iteration-changes/get?view=azure-devops-rest-7.1).
 
-Een comment kan al gepubliceerd zijn wanneer een client een fout of timeout ziet. De onderzochte createcontracten documenteren geen exactly-once-garantie of atomaire batchreview. **[INFERENCE]** blind opnieuw publiceren kan duplicaten opleveren. Service hooks kunnen inhoud al doorgeven; publiceren en daarna verwijderen is geen private draft. [Create](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1), [comment-event](https://learn.microsoft.com/en-us/azure/devops/service-hooks/events?view=azure-devops#pull-request-commented-on).
+A comment may already have been published when a client sees an error or timeout. The create contracts examined do not document an exactly-once guarantee or atomic batch review. **[INFERENCE]** blindly republishing may create duplicates. Service hooks may already have forwarded the content; publishing and then deleting is not a private draft. [Create](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1), [comment event](https://learn.microsoft.com/en-us/azure/devops/service-hooks/events?view=azure-devops#pull-request-commented-on).
 
-## Ontwerpconsequentie en hergebruik
+## Design implications and reuse
 
-Bouw een smalle Manifest V3-browserextensie die de bestaande commenteditor behoudt en draftcontrols toevoegt. Conceptdata blijft in extensieopslag. De bestaande Azure DevOps-publicatiestap blijft expliciet en afzonderlijk; geen eigen authbackend of algemene PR-client.
+Build a narrow Manifest V3 browser extension that preserves the existing comment editor and adds draft controls. Draft data stays in extension storage. The existing Azure DevOps publication step remains explicit and separate; no custom authentication backend or general-purpose PR client.
 
-De eerdere tuicr-uitbreidingsroute vervalt: die voldoet niet aan browser-only. Bestaande browserextensies zijn referenties voor DOM-integratie, geen bewezen vervanging. Controleer hun actuele licentie en onderhoudsstatus vóór codeovername; nu is geen broncode gekopieerd of geforkt.
+The earlier option of extending tuicr is dropped: it does not meet the browser-only requirement. Existing browser extensions are references for DOM integration, not proven replacements. Check their current licenses and maintenance status before reusing code; no source code has been copied or forked at this stage.
 
-## Onderzoeksgrenzen
+## Research boundaries
 
-Geen ingelogde tenantinspectie, extensie-installatie, multi-user privacyproef of live Azure DevOps-mutatie. Openbare standaardbranches kunnen afwijken van uitgebrachte versies. Exacte actuele DOM-selectors, accountcontext, sessiegedrag en native submit-successdetectie moeten vóór implementatie in een toegestane omgeving worden onderzocht. De UI-schets is gebaseerd op Microsoft's gepubliceerde editorafbeelding, niet op een live capture van de gebruiker.
+No authenticated tenant inspection, extension installation, multi-user privacy check or live Azure DevOps mutation was performed for this research. Public default branches may differ from released versions. Exact current DOM selectors, account context, session behavior and native submit-success detection must be investigated in an authorized environment before implementation. The UI sketch is based on Microsoft's published editor image, not a live capture from the user.

@@ -1,97 +1,97 @@
-# Threadhold — browserextensie en implementatie
+# Threadhold — browser extension and implementation
 
-## Productcontract
+## Product contract
 
-Uitsluitend een Chrome/Edge-extensie in de bestaande Azure DevOps-PR. Geen aparte review-app, CLI, MCP-server, lokale server of desktopproces.
+A Chrome/Edge extension exclusively within the existing Azure DevOps PR. No separate review app, CLI, MCP server, local server or desktop process.
 
-- **Create:** native editor openen, schrijven, **Opslaan als draft**.
-- **Read:** volledige draft tussen de gewone comments; geen extra tab of index.
-- **Update:** potlood opent de native editor. **Opslaan** en Ctrl+Enter blijven lokaal. Het ID blijft gelijk, de revisie stijgt. **Cancel** bewaart de laatst opgeslagen versie.
-- **Delete:** prullenbak met bevestiging; alleen lokale opslag.
-- **Publiceren:** **Drafts plaatsen (n)** naast **Approve**, met expliciete bevestiging. Geen automatische approve of resolve.
+- **Create:** open the native editor, write, choose **Save as draft**.
+- **Read:** the full draft appears among ordinary comments; no extra tab or index.
+- **Update:** the pencil opens the native editor. **Save** and Ctrl+Enter remain local. The ID stays the same and the revision increases. **Cancel** preserves the last saved version.
+- **Delete:** trash icon with confirmation; local storage only.
+- **Publish:** **Publish drafts (n)** beside **Approve**, with explicit confirmation. No automatic approval or resolution.
 
-Algemene PR-comments, replies op bestaande threads en inline comments met meerregelige selecties vallen binnen dit contract. Een draft is geen servercomment met `pending`-status. Gepubliceerde comments wijzigen of verwijderen valt erbuiten.
+General PR comments, replies to existing threads and inline comments with multi-line selections are within this contract. A draft is not a server comment with `pending` status. Editing or deleting published comments is out of scope.
 
 ## UI
 
-Draftkaarten hergebruiken de native commentstructuur en Azure DevOps-klassen: avatar, auteur, tijd, Markdown-bodygebied en bewerk-/verwijdericonen rechtsboven. Alleen een kleine **Draft**-badge onderscheidt de lokale kaart. De editor, toolbar, mentions en preview blijven van Azure DevOps.
+Draft cards reuse the native comment structure and Azure DevOps classes: avatar, author, time, Markdown body area and edit/delete icons in the upper-right corner. Only a small **Draft** badge distinguishes the local card. The editor, toolbar, mentions and preview remain Azure DevOps controls.
 
-Tijdens draftbewerking verdwijnt de leeskaart en worden native publicatieknoppen verborgen. De lokale **Opslaan**-actie vervangt die handeling; ook Ctrl+Enter wordt uitsluitend binnen die draftbewerking lokaal afgehandeld. Niet-gekoppelde native editors blijven ongewijzigd.
+During draft editing, the read card disappears and native publication buttons are hidden. The local **Save** action replaces that operation; Ctrl+Enter is also handled locally only within that draft edit. Unbound native editors remain unchanged.
 
-De editor sluit pas na bevestigde opslag. Opslagfouten of revisieconflicten bewaren de editortekst. Een draft mag geen andere aanwezige editorinhoud overschrijven. Niet-gemounte of verouderde locaties blijven leesbaar als herstelkaart tussen de Overview-comments.
+The editor closes only after storage is confirmed. Storage errors or revision conflicts preserve the editor text. A draft must not overwrite other existing editor content. Unmounted or outdated locations remain readable as recovery cards among the Overview comments.
 
-## Technische indeling
+## Technical structure
 
-| Onderdeel | Keuze en verantwoordelijkheid |
+| Component | Choice and responsibility |
 | --- | --- |
 | Platform | Manifest V3, WXT, TypeScript; Chrome/Edge 124+ |
-| Content script | Geïsoleerde wereld; native controls en draftkaarten |
-| Editoradapter | DOM-context, tekst lezen/herstellen, exacte general/reply/inline-binding |
-| Monaco-integratie | Vroege MAIN-world bridge; publieke editorselecties en viewzones |
-| Service worker | Afzender-/scopevalidatie, opslag en geautoriseerde bridge-opdrachten |
-| Draft-core | CRUD, CAS-revisies, idempotente create, publicatiejournal |
-| Opslag | IndexedDB in de extensie-origin; geen website-localStorage |
-| Authenticatie | Bestaande Azure DevOps-browsersessie; geen PAT |
-| Agents | Dezelfde zichtbare browsercontrols, IDs en revisies |
+| Content script | Isolated world; native controls and draft cards |
+| Editor adapter | DOM context, text reading/restoration, exact general/reply/inline binding |
+| Monaco integration | Early MAIN-world bridge; public editor selections and viewzones |
+| Service worker | Sender/scope validation, storage and authorized bridge commands |
+| Draft core | CRUD, CAS revisions, idempotent creation, publication journal |
+| Storage | IndexedDB in the extension origin; no website localStorage |
+| Authentication | Existing Azure DevOps browser session; no PAT |
+| Agents | The same visible browser controls, IDs and revisions |
 
-De Monaco-bridge krijgt alleen noodzakelijke locatiegegevens, geen draftbodies of toegang tot de database. Geen publiek `window.postMessage`-CRUD-contract, verborgen React-state of interne Monaco-services. Publieke API en actuele native DOM blijven wel compatibiliteitsrisico's.
+The Monaco bridge receives only necessary location data, not draft bodies or database access. No public `window.postMessage` CRUD contract, hidden React state or internal Monaco services. The public API and current native DOM still present compatibility risks.
 
-## Context en duurzaam model
+## Context and durable model
 
-Scope bestaat uit organisatie, project-ID, repository-ID, PR-ID en stabiele gebruikers-ID. Alleen PR-nummer of displaynaam is onvoldoende. Onbekende identiteit of ambigue locatie blokkeert binding.
+Scope consists of organization, project ID, repository ID, PR ID and stable user ID. A PR number or display name alone is insufficient. Unknown identity or an ambiguous location blocks binding.
 
-Een draft bewaart UUID, scope, revisie, body en tijdstempels, plus:
+A draft stores a UUID, scope, revision, body and timestamps, plus:
 
-- `general`, `inline` of `reply`;
-- inline: bestand, side, exacte start-/eindposities, bekeken iteratie, source-/targetcommit en eventueel changeTrackingId;
-- reply: bestaande thread-ID;
-- toestand `saved`, `sending` of `unknown`, met een duurzaam submissionrecord bij publicatie.
+- `general`, `inline` or `reply`;
+- inline: file, side, exact start/end positions, viewed iteration, source/target commit and optional changeTrackingId;
+- reply: existing thread ID;
+- state `saved`, `sending` or `unknown`, with a durable submission record when publishing.
 
-Stale is afgeleid van de actuele heads/iteratie of een verwijderde thread. Geen stille remapping na een push of rename. Expliciet opnieuw koppelen behoudt ID en verhoogt revisie.
+Staleness is derived from the current heads/iteration or a deleted thread. No silent remapping after a push or rename. Explicit relinking preserves the ID and increases the revision.
 
-Update en delete eisen de gelezen revisie. Multi-tabconflicten overschrijven niets. Idempotente create gebruikt een request-ID; dezelfde request met andere inhoud conflicteert. De service worker herstelt onderbroken `sending`-records als `unknown`.
+Update and delete require the revision that was read. Multi-tab conflicts overwrite nothing. Idempotent creation uses a request ID; the same request with different content conflicts. The service worker recovers interrupted `sending` records as `unknown`.
 
-## Publicatie
+## Publication
 
-1. Lees actuele identiteit, PR, heads, threads en opgeslagen drafts.
-2. Blokkeer stale anchors, onbekende publicatiestatus en afwijkende open editorinhoud.
-3. Vraag expliciete bevestiging voor het aantal opgeslagen drafts.
-4. Bewaar per draft de exacte body en bestaande remote IDs duurzaam als `sending`, vóór het POST-verzoek.
-5. Verstuur één same-origin REST-verzoek: nieuwe thread voor general/inline, comment op de bestaande thread voor reply. Geen resolve of vote.
-6. Bevestig met GET een unieke nieuwe remote comment met dezelfde auteur, body en locatie. HTTP-succes alleen is onvoldoende om de lokale draft te verwijderen.
-7. Bij fout, timeout of ambiguïteit: behoud als `unknown`, stop de batch en herhaal niet automatisch.
+1. Read the current identity, PR, heads, threads and saved drafts.
+2. Block stale anchors, unknown publication status and conflicting open editor content.
+3. Ask for explicit confirmation of the number of saved drafts.
+4. Durably store each draft's exact body and existing remote IDs as `sending` before the POST request.
+5. Send one same-origin REST request: a new thread for general/inline, or a comment on the existing thread for a reply. No resolution or vote.
+6. Confirm through GET a unique new remote comment with the same author, body and location. HTTP success alone is insufficient to delete the local draft.
+7. On an error, timeout or ambiguity: retain as `unknown`, stop the batch and do not retry automatically.
 
-Er is geen exactly-once-garantie over netwerkonderbrekingen. **Publicatie controleren** is read-only. Opnieuw vrijgeven voor bewerking vraagt erkenning van het duplicaatrisico.
+There is no exactly-once guarantee across network interruptions. **Check publication** is read-only. Releasing a draft for editing again requires acknowledgment of the duplication risk.
 
-Gedocumenteerde endpoints:
+Documented endpoints:
 
-- [Threads maken](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1)
-- [Replies maken](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-thread-comments/create?view=azure-devops-rest-7.1)
+- [Create threads](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1)
+- [Create replies](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-thread-comments/create?view=azure-devops-rest-7.1)
 
-## Permissions en privacy
+## Permissions and privacy
 
-Expliciet toegekende optional host permission voor `dev.azure.com` of een concrete legacy-organisatiehost; dynamische registratie via `scripting`. Geen `<all_urls>`, cookies-, history-, debugger- of nativeMessaging-permissie.
+Explicitly granted optional host permission for `dev.azure.com` or a specific legacy organization host; dynamic registration through `scripting`. No `<all_urls>`, cookies, history, debugger or nativeMessaging permission.
 
-De service worker valideert extensie-afzender, top-level frame, toegestane origin/PR-route, scope en payload. Geen `externally_connectable`, cloudbackend, browsersync of telemetry met bodies. Meegeleverde scripts, geen runtime-CDN.
+The service worker validates the extension sender, top-level frame, allowed origin/PR route, scope and payload. No `externally_connectable`, cloud backend, browser sync or telemetry containing bodies. Bundled scripts, no runtime CDN.
 
-Lokale opslag is niet versleuteld door Threadhold. Op de pagina weergegeven tekst kan door paginacode worden gelezen. Extensieverwijdering of profielverlies kan drafts vernietigen. “Privé” betekent hier niet als Azure DevOps-comment gepubliceerd, niet onzichtbaar voor alle processen of scripts.
+Threadhold does not encrypt local storage. Page code can read text displayed on the page. Removing the extension or losing the profile can destroy drafts. “Private” here means not published as an Azure DevOps comment, not invisible to every process or script.
 
-## Agentbediening
+## Agent controls
 
-| Actie | Zichtbaar contract |
+| Action | Visible contract |
 | --- | --- |
-| Create/update | `data-threadhold-action="save"` in de bedoelde native editor |
-| Read | `data-threadhold-card`, volledige `.th-body` |
-| Edit | `data-threadhold-action="edit"` op de kaart |
-| Delete | `data-threadhold-action="delete"`, daarna bevestiging |
-| Identiteit | `data-threadhold-draft-id` en `data-threadhold-revision` |
+| Create/update | `data-threadhold-action="save"` in the intended native editor |
+| Read | `data-threadhold-card`, full `.th-body` |
+| Edit | `data-threadhold-action="edit"` on the card |
+| Delete | `data-threadhold-action="delete"`, followed by confirmation |
+| Identity | `data-threadhold-draft-id` and `data-threadhold-revision` |
 
-Agents wachten op opslagresultaat/revisie, niet op vaste sleeps. Ctrl+Enter is alleen lokaal tijdens geopende draftbewerking; gewone native editors behouden hun eigen publicatiegedrag.
+Agents wait for the storage result/revision, not fixed sleeps. Ctrl+Enter is local only during an open draft edit; ordinary native editors retain their own publication behavior.
 
-## Verificatie en distributie
+## Verification and distribution
 
-Gerichte tests dekken opslagisolatie, revisieconflicten, context/anchorbinding, publicatiepayloads en foutbehoud. Browserfixtures laden de echte unpacked extensie en oefenen CRUD, reload, native draftbewerking en bevestigde batchpublicatie uit zonder bedrijfsdata te publiceren.
+Targeted tests cover storage isolation, revision conflicts, context/anchor binding, publication payloads and preservation on failure. Browser fixtures load the real unpacked extension and exercise CRUD, reload, native draft editing and confirmed batch publication without publishing company data.
 
-De echte Azure DevOps-interface vereist daarnaast visuele en lokale CRUD-verificatie: een fixture bewijst geen blijvende DOM-compatibiliteit. Echte publicatieproeven vereisen afzonderlijke toestemming; zonder die proef wordt geen live publicatieclaim gedaan.
+The real Azure DevOps interface also requires visual and local CRUD verification: a fixture does not prove lasting DOM compatibility. Real publication checks require separate permission; without them, no claim of live publication is made.
 
-Lever broncode, unpacked build en installatie-/privacyinstructies. Een ZIP is geen ondertekende store-installatie. Publisheraccountstappen en storegoedkeuring zijn nog geen gepubliceerde listing.
+Deliver source code, an unpacked build and installation/privacy instructions. A ZIP is not a signed store installation. Publisher account steps and store approval do not yet constitute a published listing.

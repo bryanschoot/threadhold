@@ -1,38 +1,91 @@
-# Threadhold
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg">
+    <img src="docs/assets/wordmark.svg" alt="Threadhold" width="420" height="92">
+  </picture>
+</p>
 
-**Privéconcepten, direct in de bestaande Azure DevOps-commenteditor.**
+<h1 align="center">Review now. Publish when you're ready.</h1>
 
-Een browserextensie voor Chrome en Edge. Geen losse webapp, desktop-app, CLI of lokale server.
+<p align="center">
+  Local drafts for Azure DevOps pull requests.<br>
+  Write in the editor you already use. Keep your feedback until you're ready to share it.
+</p>
 
-Status: werkende unpacked Chrome/Edge-extensie. Geen gepubliceerde browserstorelisting.
+<p align="center">
+  <strong>Chrome &amp; Edge</strong> · Native comment editor · No PAT required
+</p>
 
-De interface volgt de browsertaal: Engels standaard, Nederlands voor `nl`-locales. Andere talen vallen terug op Engels. De onderstaande instructies gebruiken Nederlandse labels; bijvoorbeeld **Save as draft**, **Edit**, **Save** en **Publish drafts** in een Engelse browser.
+<p align="center">
+  <a href="#get-started">Get started</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#local-by-design">Privacy</a>
+</p>
 
-## Werking
+---
 
-1. Schrijf in de **bestaande Azure DevOps-commenteditor** en kies **Opslaan als draft**.
-2. De bevestigde draft verschijnt tussen de gewone comments, met lokaal gerenderde en gesanitiseerde Markdown, native typografie, avatar, een kleine **Draft**-badge en bewerk-/verwijdericonen. Geen extra tab.
-3. Het potlood opent dezelfde native editor. **Opslaan** en Ctrl+Enter bewaren de wijziging lokaal; **Cancel** behoudt de laatst opgeslagen versie.
-4. Alleen **Drafts plaatsen (n)** naast **Approve** — of naast de native **Publish**-actie bij een draft-PR — publiceert opgeslagen drafts, na bevestiging. De gewone, niet aan een draft gekoppelde Azure DevOps-commentacties blijven ongewijzigd.
+## Your review, on your terms
 
-Dit geldt voor inline comments, algemene PR-comments en replies. Een agent voert create/read/update/delete uit via dezelfde browserbediening, met stabiele labels en draft-IDs. Er is geen afzonderlijke agent-CLI nodig; een shellagent zonder browsertoegang kan deze extensie niet bedienen.
+A good review takes more than one pass. Threadhold lets you collect your thoughts without turning every comment into a notification.
 
-Open **Draft help / Drafthulp** naast de PR-acties voor de ingebouwde browseragentinstructies, opslagbevestiging en de grens tussen lokale drafts en publicatie. De hulp werkt ook zonder repositorykennis.
+- **Stay in the flow.** Draft inline comments, general PR comments and replies in the existing Azure DevOps editor. No separate app, tab or review panel.
+- **Keep the context.** Drafts sit alongside the conversation, with Markdown previews and their original code selections.
+- **Come back to it.** Saved drafts survive page reloads. Edit, cancel an edit or delete a draft before sharing it.
+- **Make publishing a decision.** A dedicated **Publish drafts (n)** action asks for confirmation. It does not approve the PR or resolve threads.
+- **Work with a browser agent.** Built-in **Draft help** explains how an agent can create, read, edit and delete local drafts through the same browser controls. No agent CLI or local server.
 
-## Bestaat dit al?
+## How it works
 
-Azure DevOps documenteert gewone comment-CRUD, maar geen private draft-reviewinterface. `pending` is geen privacygarantie. VS Code- en terminaltools bieden wel lokale concepten, maar passen niet bij de gekozen browser-only workflow.
+1. **Write.** Open an Azure DevOps PR and write in its native comment editor.
+2. **Hold.** Choose **Save as draft**. Once saved locally, your comment appears with a **Draft** badge. Use its edit and delete controls to refine your review.
+3. **Share.** When you're ready, choose **Publish drafts (n)** next to **Approve**, or next to **Publish** on a draft PR. Confirm to send the saved drafts to Azure DevOps.
 
-Er bestaan ook browserextensies die de Azure DevOps-reviewinterface uitbreiden. Een aantoonbaar volledige match — bestaande commenteditor uitbreiden met duurzame private drafts én browser-agent-CRUD — is in dit onderzoek niet vastgesteld. Dat is geen bewijs dat die nergens bestaat.
+Saving a draft does **not** post an Azure DevOps comment. Ordinary Azure DevOps comment actions still work as usual; Threadhold does not turn them into draft actions.
 
-## Documenten
+The extension uses English by default and Dutch for Dutch browser locales.
 
-- [Onderzoek en bestaande oplossingen](docs/research.md)
-- [Technische aanpak en implementatieplan](docs/implementation-plan.md)
-- [Installeren, bedienen en privacy](docs/installatie.md)
+## Get started
 
-## Naam en privacy
+**Available as an unpacked extension.** There is no Chrome Web Store or Edge Add-ons listing yet.
 
-**Threadhold**: houd reviewthreads vast tot je ze wilt publiceren. Repository: `bryanschoot/threadhold`, privé aangemaakt. Domein en merkrechten zijn niet gereserveerd of juridisch onderzocht.
+You need **Node.js 22+**, **Chrome or Edge 124+**, and access to this repository.
 
-Concepten staan in IndexedDB in de extensie-origin van het lokale browserprofiel: niet als Azure DevOps-comment, niet in website-localStorage, niet in Git en niet via browsersync. Dit is geen encryptie- of sandboxgarantie. Op de pagina getoonde tekst is zichtbaar voor scripts met toegang tot die pagina. Een extensie verwijderen of een profiel verliezen kan ook drafts verwijderen.
+```sh
+git clone https://github.com/bryanschoot/threadhold.git
+cd threadhold
+npm ci
+npm run build
+```
+
+1. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+2. Choose **Load unpacked** and select `.output/chrome-mv3`.
+3. Open the Threadhold extension popup, enter `dev.azure.com` or your specific `organization.visualstudio.com` host, and grant access.
+4. Open or refresh an Azure DevOps PR. **Save as draft** appears beside the native comment actions.
+
+For updates, recovery and detailed controls, see the [installation and usage guide](docs/installation.md).
+
+## Local by design
+
+- **Stored in your browser profile.** Drafts live in the extension's IndexedDB, scoped to your account and PR. They are not Azure DevOps comments until you publish them.
+- **No external backend, telemetry or browser sync.** Threadhold uses your existing Azure DevOps browser session; no personal access token is needed.
+- **Access is opt-in.** You choose which supported Azure DevOps host the extension can access.
+
+Local does not mean encrypted or invisible: Threadhold does not encrypt its database, and scripts with access to the Azure DevOps page can read draft text displayed there. Removing the extension or losing your browser profile can erase your drafts. There is no cloud backup.
+
+Publishing is not guaranteed exactly once. If a result cannot be verified, Threadhold keeps the draft with an unknown status and stops the batch rather than retrying automatically. See [privacy and recovery](docs/installation.md#privacy-and-recovery) for details.
+
+## Project status
+
+Threadhold **0.1.0** is a working unpacked Chrome/Edge extension, not a published store release. It extends the Azure DevOps page UI; Azure DevOps changes can require compatibility updates.
+
+The name comes from holding a review thread until you're ready to publish. Domain availability and trademark rights have not been verified.
+
+## Documentation & development
+
+- [Installation, usage, browser agents and privacy](docs/installation.md)
+- [Changelog](CHANGELOG.md)
+- [Research and existing solutions](docs/research.md)
+- [Technical approach and implementation plan](docs/implementation-plan.md)
+- Brand assets: [symbol](docs/assets/logo.svg), [light-background wordmark](docs/assets/wordmark.svg), [dark-background wordmark](docs/assets/wordmark-dark.svg)
+
+Built with TypeScript and WXT. Use `npm run dev` for development, `npm run typecheck` for type checking, `npm test` for unit tests, and `npm run test:browser` for the isolated browser suite. `npm run zip` creates an unpacked distribution archive; it is not a signed store package.

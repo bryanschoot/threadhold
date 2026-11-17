@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 112" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Threadhold</title>
+  <desc id="desc">Threadhold wordmark with a speech bubble holding a pause symbol.</desc>
+  <g transform="translate(8 8)" stroke="var(--accent, #6366f1)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M33 16h30c11 0 18 7 18 18v22c0 11-7 18-18 18H39L15 88V34c0-11 7-18 18-18Z"/>
+    <path d="M39 34v22m18-22v22"/>
+  </g>
+  <text x="126" y="77" fill="var(--fg, #18181b)" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="64" font-weight="650" letter-spacing="-2.5">threadhold</text>
+</svg>

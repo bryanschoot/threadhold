@@ -2,20 +2,22 @@
 
 ## 0.1.0
 
-- Browser-only Chrome/Edge-extensie voor lokale Azure DevOps-PR-drafts.
-- Engelse interface als standaard/fallback, Nederlands op basis van de browsertaal.
-- Duurzame general/inline/reply-CRUD met account-/PR-scope, revisies en multi-tabconflictdetectie.
-- Draftkaarten tussen native comments; geen extra tab. Native avatar, typografie en bewerk-/verwijdericonen.
-- Potlood opent ook de ingeklapte algemene native editor; Opslaan en Ctrl+Enter wijzigen de draft lokaal. Cancel behoudt de opgeslagen versie.
-- Exacte meerregelige Monaco-anchors met begin-/eindkolommen; gereserveerde viewzones met begrensde interactieve overlays boven de codelaag.
-- Native All Changes-selecties bewaren kant, regels en UTF-16-kolommen vóór het openen van de editor. Alle negatieve tijdelijke thread-ID's worden ondersteund; ambigue selecties worden niet gegokt.
-- Anonieme originele Monaco-modellen worden uitsluitend via hun eigen commit-gecontroleerde diffpartner gekoppeld. Native heropenen gebruikt de zichtbare selectieknop en behoudt ook ingeklapte anchors.
-- Native Comment selected text ondersteunt muis, toetsenbordactivatie en F4, inclusief een volledige regel zonder selectie. Suggestions behouden hun oorspronkelijke Markdown bij lokaal opslaan, herladen, bewerken en publiceren.
-- All Changes-kolommen tellen uitsluitend broncode; verborgen toegankelijkheidslabels zoals Plus verschuiven de selectie niet.
-- Smalle DevOps-schermen gebruiken een apart native commentpaneel buiten Monaco. Drafts koppelen dat paneel aan de exacte native selectiemarkering, ook bij meerregelige suggestions en native heropenen; ambigue editorlocaties worden geweigerd.
-- De verborgen Bolt-meet-textarea wordt expliciet uitgesloten, ook wanneer DevOps geen aria-hidden instelt.
-- Drafts plaatsen naast Approve, of naast Publish bij draft-PR's, met bevestiging, duurzaam publicatiejournal en verificatie van remote IDs. Geen automatische retry, approve of resolve.
-- Ingebouwde Engelse/Nederlandse Draft help met lokale browseragent-CRUD, controleerbare opslagresultaten en expliciete publicatiegrens; toegankelijk via toetsenbord en schermlezer.
-- Lokale Markdownweergave met sanitization, veilige links en leesbare DevOps-mentionreferenties; broninhoud blijft exact behouden voor bewerken en publiceren.
-- Algemene drafts staan als native kaart bij de composer; avatarselectie vereist overeenkomende identiteit en tijden worden relatief weergegeven.
-- Unpacked distributie; geen gepubliceerde Chrome/Edge-storelisting.
+- English product-facing README and documentation, with reusable SVG logo assets for light and dark backgrounds.
+- Symbol-only extension icons for the browser toolbar and extension manager in 16, 32, 48 and 128 px sizes.
+- Browser-only Chrome/Edge extension for local Azure DevOps PR drafts.
+- English interface as the default/fallback, with Dutch selected from the browser language.
+- Durable general/inline/reply CRUD with account/PR scope, revisions and multi-tab conflict detection.
+- Draft cards among native comments; no extra tab. Native avatar, typography and edit/delete icons.
+- The pencil also opens the collapsed general native editor; Save and Ctrl+Enter update the draft locally. Cancel preserves the saved version.
+- Exact multi-line Monaco anchors with start/end columns; reserved viewzones with bounded interactive overlays above the code layer.
+- Native All Changes selections preserve side, lines and UTF-16 columns before opening the editor. All negative temporary thread IDs are supported; ambiguous selections are not guessed.
+- Anonymous original Monaco models are linked only through their own commit-checked diff partner. Native reopening uses the visible selection button and also preserves collapsed anchors.
+- Native Comment selected text supports the mouse, keyboard activation and F4, including a full line without a selection. Suggestions preserve their original Markdown through local saving, reloading, editing and publishing.
+- All Changes columns count source code only; hidden accessibility labels such as Plus do not shift the selection.
+- Narrow DevOps screens use a separate native comment panel outside Monaco. Drafts bind that panel to the exact native selection marker, including multi-line suggestions and native reopening; ambiguous editor locations are rejected.
+- The hidden Bolt measurement textarea is explicitly excluded, even when DevOps does not set aria-hidden.
+- Publish drafts beside Approve, or beside Publish on draft PRs, with confirmation, a durable publication journal and remote ID verification. No automatic retry, approval or resolution.
+- Built-in English/Dutch Draft help with local browser-agent CRUD, verifiable storage results and an explicit publication boundary; accessible by keyboard and screen reader.
+- Local Markdown rendering with sanitization, safe links and readable DevOps mention references; source content remains exactly preserved for editing and publishing.
+- General drafts appear as a native card near the composer; avatar selection requires a matching identity and times are displayed relatively.
+- Unpacked distribution; no published Chrome/Edge store listing.
