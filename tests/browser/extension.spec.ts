@@ -85,13 +85,13 @@ let directory: string;
 let writes: number;
 let failPublication: boolean;
 let published: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
-let english: boolean;
+test.use({ locale: 'nl-NL' });
 
-test.beforeEach(async ({}, info) => {
-  english = info.title.startsWith('English');
+test.beforeEach(async ({ locale }) => {
+  const english = locale === 'en-US';
   directory = await mkdtemp(join(tmpdir(), 'threadhold-browser-'));
   const extensionPath = resolve('.output/chrome-mv3');
-  context = await chromium.launchPersistentContext(directory, { channel: 'chromium', headless: true, locale: english ? 'en-US' : 'nl-NL', args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+  context = await chromium.launchPersistentContext(directory, { channel: 'chromium', headless: true, locale, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
   let worker = context.serviceWorkers()[0];
   if (!worker) worker = await context.waitForEvent('serviceworker');
   const id = new URL(worker.url()).hostname;
@@ -313,6 +313,9 @@ test(`Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : '
 });
 }
 
+test.describe(() => {
+test.use({ locale: 'en-US' });
+
 test('English browser gets English draft actions and native editing', async () => {
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('English local draft');
   await page.getByRole('button', { name: 'Save as draft', exact: true }).click();
@@ -329,8 +332,12 @@ test('English browser gets English draft actions and native editing', async () =
   await expect(card).toHaveCount(0);
   expect(writes).toBe(0);
 });
+});
 
-for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} draft help is discoverable, keyboard accessible and survives header remount`, async () => {
+for (const en of [true, false]) test.describe(() => {
+test.use({ locale: en ? 'en-US' : 'nl-NL' });
+
+test(`${en ? 'English' : 'Dutch'} draft help is discoverable, keyboard accessible and survives header remount`, async () => {
   const label = en ? 'Draft help' : 'Drafthulp';
   const help = page.getByRole('button', { name: label, exact: true });
   await help.click();
@@ -359,6 +366,10 @@ for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} draft help is 
   await expect(dialog).not.toBeVisible();
   expect(writes).toBe(0);
 });
+});
+
+test.describe(() => {
+test.use({ locale: 'en-US' });
 
 test('English draft PR keeps draft publication and help beside its native Publish action', async () => {
   await page.goto(`${url}?draft-pr=1`);
@@ -379,8 +390,12 @@ test('English draft PR keeps draft publication and help beside its native Publis
   expect(writes).toBe(1);
   await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
 });
+});
 
-for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} general drafts render safe Markdown and reopen the collapsed native composer`, async () => {
+for (const en of [true, false]) test.describe(() => {
+test.use({ locale: en ? 'en-US' : 'nl-NL' });
+
+test(`${en ? 'English' : 'Dutch'} general drafts render safe Markdown and reopen the collapsed native composer`, async () => {
   await page.goto(`${url}?collapsed-general=1`);
   const editLabel = en ? 'Edit' : 'Bewerken';
   const saveLabel = en ? 'Save' : 'Opslaan';
@@ -427,6 +442,7 @@ for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} general drafts
   await expect(body).toHaveText('Locally updated');
   await expect(card).toHaveAttribute('data-threadhold-revision', '2');
   expect(writes).toBe(0);
+});
 });
 
 async function dragNativeTableSelection(side: 'left' | 'right', endSide: 'left' | 'right' = side): Promise<void> {
@@ -480,6 +496,9 @@ test(`All Changes ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline
   expect(writes).toBe(1);
 });
 }
+
+test.describe(() => {
+test.use({ locale: 'en-US' });
 
 for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) {
 test(`English real Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} draft stays bounded and pointer-editable`, async () => {
@@ -559,6 +578,7 @@ test(`English real Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'm
   expect(writes).toBe(0);
 });
 }
+});
 
 test('All Changes keyboard activation preserves an unchanged left-line anchor', async () => {
   await page.goto(`${url}?_a=files&table-diff=1`);
@@ -591,6 +611,9 @@ test('All Changes rejects a cross-side selection without losing native editor te
   await expect(section.getByRole('button', { name: 'Comment', exact: true })).toBeVisible();
   expect(writes).toBe(0);
 });
+
+test.describe(() => {
+test.use({ locale: 'en-US' });
 
 for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const entry of ['F4', 'selected-text click', 'selected-text keyboard']) {
 test(`English native ${entry} ${split ? 'split' : 'inline'} ${side} suggestions retain Markdown and range`, async () => {
@@ -714,3 +737,4 @@ test(`English narrow native panel ${split ? 'split' : 'inline'} ${side} ${multil
   await expect(card).toHaveCount(0);
 });
 }
+});

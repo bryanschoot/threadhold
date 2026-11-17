@@ -46,9 +46,19 @@ The extension uses English by default and Dutch for Dutch browser locales.
 
 ## Get started
 
-**Available as an unpacked extension.** There is no Chrome Web Store or Edge Add-ons listing yet.
+**Download the built extension from [GitHub Releases](https://github.com/bryanschoot/threadhold/releases).** Choose `threadhold-<version>-chrome-mv3.zip` under **Assets**, not GitHub's automatic source-code archives. If no release is available yet, use the source-build instructions below. Private-repository downloads require a GitHub account with access.
 
-You need **Node.js 22+**, **Chrome or Edge 124+**, and access to this repository.
+You need **Chrome or Edge 124+**. Node.js is not required for a release download. There is no Chrome Web Store or Edge Add-ons listing yet.
+
+1. Extract the ZIP into a permanent folder; `manifest.json` is at its root.
+2. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+3. Choose **Load unpacked** and select the extracted folder.
+4. Open the Threadhold extension popup, enter `dev.azure.com` or your specific `organization.visualstudio.com` host, and grant access.
+5. Open or refresh an Azure DevOps PR. **Save as draft** appears beside the native comment actions.
+
+### Build from source
+
+For development or before the first release, install **Node.js 22+** and run:
 
 ```sh
 git clone https://github.com/bryanschoot/threadhold.git
@@ -57,10 +67,7 @@ npm ci
 npm run build
 ```
 
-1. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
-2. Choose **Load unpacked** and select `.output/chrome-mv3`.
-3. Open the Threadhold extension popup, enter `dev.azure.com` or your specific `organization.visualstudio.com` host, and grant access.
-4. Open or refresh an Azure DevOps PR. **Save as draft** appears beside the native comment actions.
+Load `.output/chrome-mv3` as the unpacked extension.
 
 For updates, recovery and detailed controls, see the [installation and usage guide](docs/installation.md).
 
@@ -89,3 +96,5 @@ The name comes from holding a review thread until you're ready to publish. Domai
 - Brand assets: [symbol](docs/assets/logo.svg), [light-background wordmark](docs/assets/wordmark.svg), [dark-background wordmark](docs/assets/wordmark-dark.svg)
 
 Built with TypeScript and WXT. Use `npm run dev` for development, `npm run typecheck` for type checking, `npm test` for unit tests, and `npm run test:browser` for the isolated browser suite. `npm run zip` creates an unpacked distribution archive; it is not a signed store package.
+
+Releases are built by GitHub Actions when a `v<version>` tag is pushed. The tag must match `package.json`; type checking and unit tests must pass before the extension ZIP is published. See [release and update instructions](docs/installation.md#releasing).

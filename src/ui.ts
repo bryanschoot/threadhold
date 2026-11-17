@@ -353,9 +353,7 @@ export function createPublishControl(drafts: Draft[], onPublish: () => void | Pr
 export interface SaveControl {
   element: HTMLElement;
   button: HTMLButtonElement;
-  status: HTMLElement;
   setBinding(draft?: Draft): void;
-  setBusy(busy: boolean): void;
   setEditing(editing: boolean): void;
   report(message: string, error?: boolean): void;
 }
@@ -366,14 +364,13 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
   const status = liveStatus();
   container.append(button, status);
   let binding: Draft | undefined;
-  let externalBusy = false;
   let saving = false;
   let editing = false;
   function update(): void {
     button.classList.toggle('primary', editing && binding !== undefined);
     button.textContent = editing && binding ? t('Save', 'Opslaan') : binding ? t('Update draft', 'Draft bijwerken') : t('Save as draft', 'Opslaan als draft');
-    button.disabled = externalBusy || saving || (binding !== undefined && binding.state !== 'saved');
-    container.setAttribute('aria-busy', String(externalBusy || saving));
+    button.disabled = saving || (binding !== undefined && binding.state !== 'saved');
+    container.setAttribute('aria-busy', String(saving));
   }
   button.addEventListener('click', (event) => {
     event.preventDefault();
@@ -397,7 +394,6 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
   return {
     element: container,
     button,
-    status,
     setBinding(draft) {
       binding = draft;
       bindDraft(container, draft);
@@ -409,10 +405,6 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
     },
     setEditing(value) {
       editing = value;
-      update();
-    },
-    setBusy(busy) {
-      externalBusy = busy;
       update();
     },
     report(message, error = false) {

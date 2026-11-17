@@ -10,11 +10,9 @@ export function validMonacoRange(range: MonacoRange): boolean {
 }
 /** Snapshot at native textarea creation, never a later moving editor selection. */
 export function captureDiscussionRange(decorations: MonacoDecoration[], selection: MonacoRange | null): MonacoRange | undefined {
-  const ranges = decorations.filter(item => item.options.inlineClassName === 'highlight-discussion-range' && validMonacoRange(item.range))
-    .map(item => item.range);
-  const unique = ranges.filter((range, index) => ranges.findIndex(other => equalMonacoRange(range, other)) === index);
-  const selected = selection && unique.find(range => equalMonacoRange(range, selection));
-  const range = selected;
+  const range = selection && decorations.find(item =>
+    item.options.inlineClassName === 'highlight-discussion-range' &&
+    validMonacoRange(item.range) && equalMonacoRange(item.range, selection))?.range;
   if (!range) return;
   return { startLineNumber: range.startLineNumber, startColumn: range.startColumn, endLineNumber: range.endLineNumber, endColumn: range.endColumn };
 }

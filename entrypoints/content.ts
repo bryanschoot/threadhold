@@ -220,9 +220,7 @@ export default defineContentScript({
           const result = await request({ action: 'beginSubmit', scope: active.scope, id: draft.id, ifRevision: draft.revision, body: draft.body, knownCommentIds: threads.flatMap(thread => thread.comments.map(comment => `${thread.id}:${comment.id}`)) });
           if (!('draft' in result)) throw new Error(t('No durable publication journal; nothing has been published.', 'Geen duurzaam publicatiejournal; er is niet gepubliceerd.'));
           const journal = result.draft;
-          let attempted = false;
           try {
-            attempted = true;
             await postDraft(journal, active, threads);
             const deadline = Date.now() + 12_000;
             let found: { threadId: number; commentId: number } | undefined;
@@ -238,7 +236,7 @@ export default defineContentScript({
             if (!found) throw new Error(t('Publication could not be uniquely confirmed. Check the thread; remaining drafts have not been posted.', 'Publicatie niet uniek bevestigd. Controleer de discussie; overige drafts zijn niet geplaatst.'));
             completed++;
           } catch (error) {
-            try { await request({ action: 'finishSubmit', scope: active.scope, id: journal.id, ifRevision: journal.revision, outcome: attempted ? 'unknown' : 'failed' }); }
+            try { await request({ action: 'finishSubmit', scope: active.scope, id: journal.id, ifRevision: journal.revision, outcome: 'unknown' }); }
             catch { /* Already reconciled, or the durable sending snapshot will recover as unknown. */ }
             throw error;
           }
