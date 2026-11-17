@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Check and package extension
+    runs-on: ubuntu-latest
+    outputs:
+      asset: ${{ steps.version.outputs.asset }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Verify release version
+        id: version
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.GITHUB_REF_NAME !== `v${version}`) {
+            throw new Error(`Tag must match package.json version: v${version}`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `version=${version}\nasset=threadhold-${version}-chrome-mv3.zip\n`);
+          NODE
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Package Chrome MV3 extension
+        run: npm run zip -- --browser chrome --mv3
+
+      - name: Verify and name release ZIP
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          version = os.environ['RELEASE_VERSION']
+          # WXT names the extension archive without the manifest-version suffix.
+          archive_path = Path('.output') / f'threadhold-{version}-chrome.zip'
+          if not archive_path.is_file() or archive_path.stat().st_size == 0:
+              raise SystemExit(f'Missing or empty extension ZIP: {archive_path}')
+          with ZipFile(archive_path) as archive:
+              if archive.namelist().count('manifest.json') != 1:
+                  raise SystemExit('Extension ZIP must contain manifest.json at its root')
+              manifest = json.loads(archive.read('manifest.json'))
+              if manifest.get('version') != version or manifest.get('manifest_version') != 3:
+                  raise SystemExit('Extension manifest must match the release version and target MV3')
+          archive_path.rename(Path('.output') / os.environ['RELEASE_ASSET'])
+          PY
+
+      - name: Upload extension ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: extension-zip
+          path: .output/${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download extension ZIP
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: extension-zip
+          path: release
+
+      - name: Publish release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ASSET: ${{ needs.build.outputs.asset }}
+        run: |
+          asset="release/$RELEASE_ASSET"
+          test -s "$asset"
+          gh release create "$RELEASE_TAG" "$asset" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes

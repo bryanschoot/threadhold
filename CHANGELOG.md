@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Tag-triggered GitHub Releases with a built Chrome/Edge extension ZIP, gated by version matching, type checking and unit tests.
+- Download-first installation and manual update instructions; no Node.js required for release downloads.
+- Local design artifacts excluded from version control; installation documentation focuses on supported behavior and verification limits.
+- Removed unused save-control API and unreachable publication branching; exact Monaco range capture no longer deduplicates all decorations.
+- Browser tests configure their language explicitly instead of deriving it from test titles.
+
 ## 0.1.0
 
 - English product-facing README and documentation, with reusable SVG logo assets for light and dark backgrounds.

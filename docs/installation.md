@@ -1,8 +1,26 @@
 # Install Threadhold
 
-## Source code and unpacked extension
+## Download a release
 
-Requirements: Node.js 22 or later, npm, and Chrome/Edge 124 or later. The repository is private; your GitHub account must have access.
+You need Chrome/Edge 124 or later. Download `threadhold-<version>-chrome-mv3.zip` from [GitHub Releases](https://github.com/bryanschoot/threadhold/releases), under **Assets**. Do not select the automatic **Source code** archives: those are not built extensions. Private-repository downloads require a GitHub account with access. If no release exists yet, build from source below.
+
+1. Extract the ZIP into a permanent folder. It should contain `manifest.json` directly.
+2. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+3. Choose **Load unpacked** and select that folder.
+4. Open the Threadhold popup, enter `dev.azure.com` or your specific `organization.visualstudio.com` host, and choose **Grant access**.
+5. Open or refresh an Azure DevOps PR.
+
+No Node.js installation is needed for this download. The ZIP is not a signed store package; developer mode remains necessary.
+
+## Update an unpacked installation
+
+Updates are manual. Close Azure DevOps tabs after saving any unsaved editor text, replace the contents of the existing extension folder with the extracted new release, then click **Reload** on the extension's card in `chrome://extensions` or `edge://extensions`. Reopen the PR.
+
+Keep the same folder and browser profile, and do not remove/reinstall the extension: removing it can erase local drafts. There is no automatic update or cloud backup.
+
+## Build from source
+
+Requirements: Node.js 22 or later, npm, Chrome/Edge 124 or later, and access to the repository.
 
 ```sh
 git clone https://github.com/bryanschoot/threadhold.git
@@ -82,14 +100,20 @@ Wait for the resulting card, higher revision or removal, not a fixed sleep or me
 
 ## Verification boundaries
 
-- The branding update passed type checking and a production build. The generated manifest includes symbol-only toolbar and extension-manager icons at 16, 32, 48 and 128 px. The README and logo were visually inspected in a browser; no test suites or live Azure DevOps publication checks were run for this update.
-- The narrow native comment panel recovery work was verified with type checking, a production build and 28 passing targeted browser cases. The full unit and browser suites were not rerun for that work.
-- All Changes has eight selection cases: inline/split, left/right, single-/multi-line, including refresh, native editing and exact publication coordinates against the test backend. Additional cases check keyboard activation and safely rejecting a selection across both sides without losing text.
-- Six additional cases run a real Monaco 0.57 editor in the observed textarea input mode. They check refresh, mouse-clickable Edit/Delete, local editing/cancellation, panel boundaries, horizontal and vertical scrollbar interaction, wheel scrolling and narrowing in inline right and split left/right.
-- Ten real-Monaco cases check Comment selected text through the mouse, Enter and F4 in inline right and split left/right, plus F4 without a selection for a full line. Native Insert a suggestion is saved locally, reloaded and edited; exact Markdown and selection coordinates are checked during publication against the isolated test backend. All Changes fixtures also contain the hidden Plus accessibility label to catch shifted source columns.
-- Twelve additional cases use the live-observed narrow panel structure outside Monaco: inline right and split left/right, single-line comments and multi-line suggestions through F4, the mouse and Enter. They check saving, reloading, native reopening, Ctrl+Enter and exact payloads against the test backend. Desktop and panel fixtures include a Bolt measurement textarea without aria-hidden; it must not introduce an extra draft button or bind to the wrong input.
-- The draft-PR header and collapsed general composer have regression coverage. English/Dutch preview tests check Markdown, unsafe HTML/URLs, preserved source content, mention references, avatar identity, relative time and card placement.
-- Browser cases load the real unpacked extension in isolated profiles with a test backend. The real Monaco surface was visually inspected; the test host does not include full DevOps styling. This is not a pixel comparison with the current Azure DevOps UI or a stable DOM contract.
-- Previously, a fresh browser agent without repository knowledge discovered Draft help and performed local CRUD while preserving IDs/revisions and making zero write requests. The current suite retains the help/CRUD regressions.
-- User-provided live DOM readings showed two native variants: a bolt-panel outside Monaco on narrow screens, and a zone-widget inside Monaco on desktop. The new panel regression failed before the fix because Save as draft was missing and passed afterward. After reloading Threadhold, the user reported “Seems to work now” (translated from Dutch). This is a positive user observation, not an independent full live recheck: navigation from that agent session continued to fail with relay extension disconnected. No browser/tab close commands were issued through the relay; automated checks use disposable test profiles only.
-- No real Azure DevOps comments were published, threads changed or attachments uploaded during that recovery work. Live server publication, full DevOps mention-name resolution and store installation are not claimed as verified.
+- Unit tests cover storage isolation, revisions, publication reconciliation, routes and exact selection ranges.
+- Browser tests load the real unpacked extension in temporary profiles with an isolated test backend. They cover local CRUD, reloads, native editing, English/Dutch controls, Markdown sanitization, inline/split selections and narrow panels.
+- Fixture publication checks verify request payloads without posting real Azure DevOps comments. They do not prove compatibility with every live Azure DevOps DOM or stylesheet.
+- Live server publication, full DevOps mention-name resolution and store installation are not claimed as verified. Azure DevOps UI changes can require adapter updates.
+
+## Releasing
+
+The GitHub Actions release workflow runs only when a `v<version>` tag is pushed, not when a pull request is opened or merged.
+
+1. Update `package.json` and `package-lock.json` to the release version and record the changes in `CHANGELOG.md`.
+2. Merge the reviewed changes, then push a matching tag, for example `v0.1.1` for version `0.1.1`.
+3. The workflow installs locked dependencies, checks the tag/version match, runs type checking and unit tests, and builds the Chrome MV3 ZIP.
+4. On success, a separate publication job attaches `threadhold-<version>-chrome-mv3.zip` to a GitHub Release with generated release notes.
+
+Only the built extension is included in the downloadable extension ZIP, not repository source, tests or local design files. GitHub also adds its own source-code archives; those are not installation packages. Browser integration tests are a separate check and do not run in this release workflow.
+
+The workflow uses GitHub's built-in token; no personal access token or store credentials are needed. A release provides a downloadable unpacked extension, not store publication or automatic updates.
