@@ -7,6 +7,51 @@
   max-width: 100%;
 }
 
+.th-card {
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.th-card.th-card-general {
+  align-self: stretch;
+  width: 100%;
+  margin-block-end: 16px;
+  border: 1px solid var(--th-border);
+  border-radius: 4px;
+  background: var(--background-color, #fff);
+}
+
+.th-card .th-card-frame {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 16px;
+}
+
+.th-card .th-comment-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.th-card .th-comment-header {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.th-card .th-author {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.th-card .th-toolbar {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+}
+
 .th-card[hidden],
 .th-native-publish-hidden,
 .th-draft-editing .bolt-button.primary:not([data-threadhold-action]) {
@@ -15,6 +60,8 @@
 
 .th-card .th-comment-content {
   min-width: 0;
+  max-width: 100%;
+  flex: 1 1 0;
 }
 
 .th-card .th-avatar-fallback {
@@ -40,10 +87,50 @@
 }
 
 .th-card .th-body {
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
   tab-size: 4;
   unicode-bidi: plaintext;
+}
+
+.th-card .th-body > :first-child {
+  margin-block-start: 0;
+}
+
+.th-card .th-body > :last-child {
+  margin-block-end: 0;
+}
+
+.th-card .th-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.th-card .th-body pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.th-card .th-body code {
+  white-space: pre-wrap;
+}
+
+.th-card .th-body pre code {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.th-card .th-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.th-card .th-body blockquote {
+  margin-inline-end: 0;
 }
 
 .th-card .th-actions,

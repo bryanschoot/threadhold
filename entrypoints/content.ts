@@ -3,7 +3,7 @@ import { browser } from 'wxt/browser';
 import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse } from '../src/contracts';
 import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
-import { discoverEditors, findDraftLocation, openDraftEditor, readEditor, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
+import { discoverEditors, findDraftLocation, installNativeDiffCapture, openDraftEditor, readEditor, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
 import { createDraftCard, createDraftHelp, createPublishControl, createSaveControl, type DraftUiActions, type SaveControl } from '../src/ui';
 import { postDraft } from '../src/ado-publish';
 import { readMonacoBindings, syncMonacoDraftSlots, type MonacoBinding } from '../src/monaco-client';
@@ -16,6 +16,7 @@ export default defineContentScript({
   matches: ['https://dev.azure.com/*', 'https://*.visualstudio.com/*'],
   registration: 'runtime',
   main(ctx) {
+    const disposeNativeDiffCapture = installNativeDiffCapture();
     let context: PrContext | undefined;
     let threads: RemoteThread[] = [];
     let drafts: Draft[] = [];
@@ -153,6 +154,15 @@ export default defineContentScript({
         await refresh();
       },
     };
+    function headerActionAnchor(): HTMLElement | undefined {
+      const page = document.querySelector('.repos-pr-details-page');
+      const vote = page?.querySelector<HTMLElement>('.repos-pr-header-vote-button');
+      if (vote) return vote.closest<HTMLElement>('.bolt-split-button') ?? vote;
+      const publish = [...(page?.querySelectorAll<HTMLButtonElement>('button:not([data-threadhold-action])') ?? [])].find(button =>
+        !button.closest('.repos-comment-editor-fit,.repos-discussion-thread,.activity-feed-list') &&
+        /^(publish|publiceren)$/i.test(button.getAttribute('aria-label')?.trim() || button.textContent?.trim() || ''));
+      return publish?.closest<HTMLElement>('.bolt-split-button') ?? publish;
+    }
     function render() {
       if (!context) return;
       publishControl?.remove();
@@ -161,7 +171,7 @@ export default defineContentScript({
         catch (error) { show(String(error), true); throw error; }
       });
       publishControl.disabled ||= batchPublishing;
-      document.querySelector('.repos-pr-header-vote-button')?.after(publishControl);
+      headerActionAnchor()?.after(publishControl);
       draftHelp ??= createDraftHelp();
       if (publishControl.isConnected) publishControl.after(draftHelp.button);
       for (const card of cards.values()) card.remove();
@@ -329,7 +339,7 @@ export default defineContentScript({
     function scheduleMonaco() {
       if (!context || monacoPending || !document.querySelector('.monaco-editor[data-uri]')) return;
       const roots = Array.from(document.querySelectorAll('.monaco-editor[data-uri]'), root => root.getAttribute('data-uri'));
-      const nativeEditors = Array.from(document.querySelectorAll('.monaco-editor textarea[class*="threadId--"]:not([aria-hidden="true"])'), textarea => textarea.id);
+      const nativeEditors = Array.from(document.querySelectorAll('.repos-comment-editor-fit textarea[class*="threadId--"]:not([aria-hidden="true"]):not(.bolt-textfield-auto-adjust-hidden)'), textarea => textarea.id);
       const signature = JSON.stringify([scopeKey(context.scope), context.sourceCommit, context.targetCommit, roots, nativeEditors, drafts.map(draft => [draft.id, draft.revision])]);
       if (signature === monacoSignature) return;
       monacoSignature = signature;
@@ -374,14 +384,14 @@ export default defineContentScript({
         scheduled = false;
         mountEditors();
         scheduleMonaco();
-        if (context && (((!publishControl?.isConnected || !draftHelp?.button.isConnected) && document.querySelector('.repos-pr-header-vote-button')) || drafts.some(draft => !cards.get(draft.id)?.isConnected && (findDraftLocation(draft, threads) || document.querySelector('.activity-feed-list'))))) render();
+        if (context && (((!publishControl?.isConnected || !draftHelp?.button.isConnected) && headerActionAnchor()) || drafts.some(draft => !cards.get(draft.id)?.isConnected && (findDraftLocation(draft, threads) || document.querySelector('.activity-feed-list'))))) render();
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });
     ctx.setInterval(() => { void routeChanged(); }, 500);
     ctx.addEventListener(window, 'focus', () => { void current().then(refresh).catch(error => show(String(error), true)); });
     ctx.addEventListener(document, 'visibilitychange', () => { if (!document.hidden && context) void current().then(refresh).catch(error => show(String(error), true)); });
-    ctx.onInvalidated(() => { disposed = true; generation++; observer.disconnect(); reset(); });
+    ctx.onInvalidated(() => { disposed = true; generation++; observer.disconnect(); disposeNativeDiffCapture(); reset(); });
     void routeChanged();
   },
 });

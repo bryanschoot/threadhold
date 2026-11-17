@@ -1,11 +1,13 @@
 import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { collapsedGeneralScript, nativeTableScript, realMonacoScript } from './native-host.fixture';
 
 // Synthetic native host fixture: proves the installed extension, not ADO DOM compatibility.
 const url = 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/42';
 const fixture = `<!doctype html><html><head><meta charset="utf-8"></head><body><main class="repos-pr-details-page"><button class="repos-pr-header-vote-button">Approve</button><nav><div role="tablist"><a role="tab" href="?">Overview</a></div></nav><div class="page-content"><div class="activity-feed-list"><div class="repos-discussion-thread" data-existing-thread><div class="repos-comment-viewer" id="1700000000">Original remote comment</div><div class="repos-discussion-thread-reply"><div class="repos-comment-editor-max-width"><input class="threadId-86671" aria-label="Reply to original comment"></div></div></div><div class="repos-discussion-thread"><div class="repos-discussion-thread-reply"><div class="repos-comment-editor-fit repos-comment-editor-max-width"><textarea class="threadId--1" aria-label="Add a comment"></textarea><div><button class="bolt-button" type="button" data-cancel>Cancel</button><button id="__bolt-comment-1" class="bolt-button primary" type="button">Comment</button></div></div></div></div></div></div></main><script>
+if(new URLSearchParams(location.search).has('draft-pr'))document.querySelector('.repos-pr-header-vote-button').outerHTML='<div class="bolt-split-button"><button class="bolt-split-button-main bolt-button primary" aria-label="Publish">Publish</button><button class="bolt-button" aria-label="Publish options">▼</button></div>';
 const textarea=document.querySelector('textarea');
 document.querySelector('[data-cancel]').addEventListener('click',()=>{textarea.value='';});
 async function publishGeneral(){await fetch(location.pathname.replace('/_git/repository/pullrequest/42','/_apis/git/repositories/repo-id/pullRequests/42/threads'),{method:'POST',body:JSON.stringify({body:textarea.value})});textarea.value='';}
@@ -45,14 +47,18 @@ if(new URLSearchParams(location.search).has('monaco')){
     ]};
     models.push(model);
     const zones=new Map();
+    root.style.cssText='position:relative;min-height:600px;width:100%';
     let editorReady=false;
     const editor={getDomNode:()=>editorReady?root:null,getModel:()=>model,getSelection:()=>selection,setSelection:range=>{selection=range},
       revealRangeInCenter(){},focus(){
         root.querySelector('[widgetid$=":AddCommentGutterWidget"]').hidden=true;
         root.querySelector('[widgetid$=":AddCommentWidget"]').hidden=selection.startLineNumber===selection.endLineNumber&&selection.startColumn===selection.endColumn;
       },onDidDispose:()=>({dispose(){}}),onDidChangeModel:()=>({dispose(){}}),
-      changeViewZones(callback){callback({addZone(zone){const id=crypto.randomUUID();root.append(zone.domNode);zones.set(id,zone);return id},
-        removeZone(id){zones.get(id)?.domNode.remove();zones.delete(id)},layoutZone(){}})}
+      getLayoutInfo:()=>({width:root.clientWidth,height:600,contentLeft:0,contentWidth:root.clientWidth,verticalScrollbarWidth:0,horizontalScrollbarHeight:0}),
+      getScrollTop:()=>0,onDidLayoutChange:()=>({dispose(){}}),onDidScrollChange:()=>({dispose(){}}),
+      addOverlayWidget(widget){root.append(widget.getDomNode())},removeOverlayWidget(widget){widget.getDomNode().remove()},
+      changeViewZones(callback){callback({addZone(zone){const id=crypto.randomUUID();root.append(zone.domNode);zones.set(id,zone);zone.onDomNodeTop?.(60);return id},
+        removeZone(id){zones.get(id)?.domNode.remove();zones.delete(id)},layoutZone(id){zones.get(id)?.onDomNodeTop?.(60)}})}
     };
     for(const callback of created)callback(editor);
     editorReady=true;
@@ -69,6 +75,9 @@ if(new URLSearchParams(location.search).has('monaco')){
     });
   }
 }
+${collapsedGeneralScript}
+${nativeTableScript}
+${realMonacoScript}
 </script></body></html>`;
 let context: BrowserContext;
 let page: Page;
@@ -107,6 +116,19 @@ test.beforeEach(async ({}, info) => {
   await context.route('https://dev.azure.com/**', async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith('/__threadhold-monaco/')) {
+      const base = resolve('node_modules/monaco-editor/min/vs');
+      const file = resolve(base, decodeURIComponent(pathname.slice('/__threadhold-monaco/'.length)));
+      if (!file.startsWith(`${base}${process.platform === 'win32' ? '\\' : '/'}`)) { await route.fulfill({ status: 404 }); return; }
+      try {
+        const contentType = file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'application/javascript' : 'application/octet-stream';
+        await route.fulfill({ contentType, body: await readFile(file) });
+      } catch { await route.fulfill({ status: 404 }); }
+      return;
+    }
+    if (pathname === '/avatars/user-id.png') {
+      await route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=', 'base64') }); return;
+    }
     if (request.method() === 'POST') {
       writes++;
       if (failPublication) { await route.fulfill({ status: 503, json: { message: 'Uncertain result' } }); return; }
@@ -137,11 +159,12 @@ test('browser-agent CRUD survives reload and never publishes', async () => {
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill(text);
   await page.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
   const card = page.locator('[data-threadhold-card]');
-  await expect(card.locator('.th-body')).toHaveText(text);
+  await expect(card.locator('.th-body')).toContainText('Lokale review: café 🧵');
+  await expect(card.locator('.th-body strong')).toHaveText('Markdown');
   await expect(page.locator('[data-existing-thread] [data-threadhold-card]')).toHaveCount(0);
   const id = await card.getAttribute('data-threadhold-draft-id');
   await page.reload();
-  await expect(card.locator('.th-body')).toHaveText(text);
+  await expect(card.locator('.th-body strong')).toHaveText('Markdown');
   await card.getByRole('button', { name: 'Bewerken', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Add a comment', exact: true })).toHaveValue(text);
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('Bijgewerkt');
@@ -248,7 +271,7 @@ test('an uncertain header publication preserves its draft and cannot silently re
   await expect(page.locator('[data-threadhold-card] .th-meta')).toContainText('Publicatiestatus onbekend');
   expect(writes).toBe(1);
   await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
-  await expect(page.locator('.page-content > [role="status"]')).toContainText('onbekende publicatiestatus');
+  await expect(page.getByRole('alert')).toContainText('onbekende publicatiestatus');
   expect(writes).toBe(1);
 });
 
@@ -336,3 +359,358 @@ for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} draft help is 
   await expect(dialog).not.toBeVisible();
   expect(writes).toBe(0);
 });
+
+test('English draft PR keeps draft publication and help beside its native Publish action', async () => {
+  await page.goto(`${url}?draft-pr=1`);
+  await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('Private draft on a draft PR');
+  await page.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = page.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText('Private draft on a draft PR');
+  await expect(page.locator('.bolt-split-button + [data-threadhold-action="publish"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Draft help', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Draft help', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.reload();
+  await expect(card.locator('.th-body')).toHaveText('Private draft on a draft PR');
+  expect(writes).toBe(0);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Publish drafts (1)', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  expect(writes).toBe(1);
+  await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
+});
+
+for (const en of [true, false]) test(`${en ? 'English' : 'Dutch'} general drafts render safe Markdown and reopen the collapsed native composer`, async () => {
+  await page.goto(`${url}?collapsed-general=1`);
+  const editLabel = en ? 'Edit' : 'Bewerken';
+  const saveLabel = en ? 'Save' : 'Opslaan';
+  const markdown = '# Review\n\n**Bold** and _italic_ and `value`\n\n- [ ] Verify\n\n> Quoted\n\n| Name | Value |\n| --- | --- |\n| Item | 42 |\n\n[External](https://example.com/) [Anchor](#section) [Unsafe](javascript:alert(1))\n\n@<11111111-1111-4111-8111-111111111111>\n\n```suggestion\nreplacement\n```\n\n<img src="/avatars/user-id.png" onerror="window.__draftXss=true"><script>window.__draftXss=true</script><svg onload="window.__draftXss=true"></svg><span data-threadhold-card="spoof">Safe text</span>';
+  await page.getByRole('textbox', { name: 'Add a comment...', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill(markdown);
+  await page.getByRole('button', { name: en ? 'Save as draft' : 'Opslaan als draft', exact: true }).click();
+  const card = page.locator('[data-threadhold-card]');
+  const body = card.locator('.th-body');
+  await expect(body.locator('h1')).toHaveText('Review');
+  await expect(body.locator('strong')).toHaveText('Bold');
+  await expect(body.locator('em')).toHaveText('italic');
+  await expect(body.locator('blockquote')).toContainText('Quoted');
+  await expect(body.locator('table')).toContainText('42');
+  await expect(body.locator('input[type="checkbox"]')).toBeDisabled();
+  await expect(body.locator('pre code')).toContainText('replacement');
+  await expect(body).toContainText('@<11111111-1111-4111-8111-111111111111>');
+  await expect(body.getByRole('link', { name: 'External', exact: true })).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(body.getByRole('link', { name: 'Anchor', exact: true })).toHaveAttribute('href', '#section');
+  await expect(body.locator('a').filter({ hasText: 'Unsafe' })).not.toHaveAttribute('href');
+  await expect(body.locator('script,svg,[onerror],[onload],[data-threadhold-card]')).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(window, '__draftXss'))).toBeUndefined();
+  await expect(card.locator('.th-author')).toHaveText('Reviewer - Team');
+  await expect(card.locator('.bolt-coin img')).toHaveAttribute('src', `${new URL(url).origin}/avatars/user-id.png`);
+  await expect(card.locator('time')).toHaveText(en ? 'Just now' : 'Zojuist');
+  const cardBox = (await card.boundingBox())!;
+  const composerBox = (await page.locator('[data-general-composer]').boundingBox())!;
+  expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(composerBox.y + 1);
+  expect(await card.evaluate(node => getComputedStyle(node).borderTopStyle)).toBe('solid');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await page.reload();
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await card.getByRole('button', { name: editLabel, exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  await expect(editor).toHaveValue(markdown);
+  await editor.fill('Locally updated');
+  await page.getByRole('button', { name: saveLabel, exact: true }).click();
+  await expect(body).toHaveText('Locally updated');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await card.getByRole('button', { name: editLabel, exact: true }).click();
+  await expect(editor).toHaveValue('Locally updated');
+  await editor.fill('Discard this change');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(body).toHaveText('Locally updated');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  expect(writes).toBe(0);
+});
+
+async function dragNativeTableSelection(side: 'left' | 'right', endSide: 'left' | 'right' = side): Promise<void> {
+  const points = await page.evaluate(selection => {
+    function point(line: number, offset: number, which: 'left' | 'right') {
+      const cell = document.querySelector(`.repos-summary-header [data-fixture-line="${line}"] .repos-line-content[data-${which === 'left' ? 'o' : 'm'}line] [data-code]`)!;
+      const range = document.createRange();
+      range.setStart(cell.firstChild!, offset); range.collapse(true);
+      const rect = range.getBoundingClientRect();
+      return { x: rect.x, y: rect.y + rect.height / 2 };
+    }
+    return { start: point(35, 4, selection.side), end: point(38, 57, selection.endSide) };
+  }, { side, endSide });
+  await page.mouse.move(points.start.x, points.start.y);
+  await page.mouse.down();
+  await page.mouse.move(points.end.x, points.end.y, { steps: 8 });
+  await page.mouse.up();
+}
+
+for (const split of [false, true]) for (const side of ['left', 'right'] as const) for (const multiline of [false, true]) {
+test(`All Changes ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} retains native selection and edits after reload`, async () => {
+  await page.goto(`${url}?_a=files&table-diff=1${split ? '&split=1' : ''}`);
+  const section = page.locator('.repos-summary-header');
+  if (multiline) await dragNativeTableSelection(side);
+  await section.getByRole('button', { name: `Add ${side} comment on line ${multiline ? 38 : 35}`, exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Table inline comment', exact: true });
+  await editor.fill('Table draft');
+  await section.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+  const card = section.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText('Table draft');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await page.reload();
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await card.getByRole('button', { name: 'Bewerken', exact: true }).click();
+  await expect(editor).toHaveValue('Table draft');
+  await editor.fill('Edited table draft');
+  await editor.press('Control+Enter');
+  await expect(card.locator('.th-body')).toHaveText('Edited table draft');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  expect(writes).toBe(0);
+  const sent = page.waitForRequest(request => request.method() === 'POST');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
+  const payload = (await sent).postDataJSON();
+  expect(payload.threadContext).toEqual({
+    filePath: '/src/file-with-hyphens.ts',
+    [side === 'left' ? 'leftFileStart' : 'rightFileStart']: { line: 35, offset: multiline ? 5 : 1 },
+    [side === 'left' ? 'leftFileEnd' : 'rightFileEnd']: { line: multiline ? 38 : 35, offset: multiline ? 58 : 1 },
+  });
+  await expect(card).toHaveCount(0);
+  expect(writes).toBe(1);
+});
+}
+
+for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) {
+test(`English real Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} draft stays bounded and pointer-editable`, async () => {
+  await page.setViewportSize({ width: 1000, height: 820 });
+  await page.goto(`${url}?_a=files&path=/src/example.ts&real-monaco=1${split ? '&split=1' : ''}`);
+  await expect(page.locator('[data-real-diff][data-ready]')).toBeVisible();
+  const root = page.locator(side === 'left' ? '.original-in-monaco-diff-editor' : '.modified-in-monaco-diff-editor');
+  const code = root.locator('textarea.inputarea');
+  await code.focus(); await code.press('Control+Home');
+  await code.press('ArrowDown'); await code.press('ArrowDown');
+  if (multiline) { await code.press('Shift+ArrowDown'); await code.press('Shift+ArrowDown'); }
+  await root.getByRole('button', { name: 'Add inline comment', exact: true }).click();
+  const editor = root.getByRole('textbox', { name: 'Inline comment', exact: true });
+  await editor.fill('Pointer-editable draft\n\n**Native Markdown**');
+  await root.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = root.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body strong')).toHaveText('Native Markdown');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await page.reload();
+  await expect(page.locator('[data-real-diff][data-ready]')).toBeVisible();
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(card).toBeVisible();
+  async function assertBoundedAndClickable() {
+    const bounds = (await root.boundingBox())!, box = (await card.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+    for (const label of ['Edit', 'Delete draft']) {
+      const button = card.getByRole('button', { name: label, exact: true });
+      expect(await button.evaluate(node => {
+        const rect = node.getBoundingClientRect();
+        return node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      })).toBe(true);
+    }
+  }
+  await assertBoundedAndClickable();
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue('Pointer-editable draft\n\n**Native Markdown**');
+  await editor.fill('Updated local draft');
+  await editor.press('Control+Enter');
+  await expect(card.locator('.th-body')).toHaveText('Updated local draft');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  const scrollbar = root.locator(':scope > .overflow-guard > .monaco-scrollable-element > .scrollbar.horizontal');
+  const track = await scrollbar.boundingBox();
+  const thumb = await scrollbar.locator('.slider').boundingBox();
+  if (!track || !thumb) throw new Error('Real horizontal scrollbar is required for this regression');
+  await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+  await page.mouse.down(); await page.mouse.move(track.x + track.width - 12, thumb.y + thumb.height / 2, { steps: 8 }); await page.mouse.up();
+  await assertBoundedAndClickable();
+  const bounds = (await root.boundingBox())!;
+  const beforeWheel = (await card.boundingBox())!.y;
+  await page.mouse.move(bounds.x + bounds.width - 40, bounds.y + bounds.height - 70);
+  await page.mouse.wheel(0, 600);
+  await expect.poll(async () => (await card.boundingBox())!.y).toBeLessThan(beforeWheel);
+  const vertical = root.locator(':scope > .overflow-guard > .monaco-scrollable-element > .scrollbar.vertical');
+  const verticalTrack = (await vertical.boundingBox())!;
+  const verticalThumb = (await vertical.locator('.slider').boundingBox())!;
+  await page.mouse.move(verticalThumb.x + verticalThumb.width / 2, verticalThumb.y + verticalThumb.height / 2);
+  await page.mouse.down(); await page.mouse.move(verticalThumb.x + verticalThumb.width / 2, verticalTrack.y + verticalTrack.height - 12, { steps: 8 }); await page.mouse.up();
+  await expect(card).toBeHidden();
+  const scrolledThumb = (await vertical.locator('.slider').boundingBox())!;
+  await page.mouse.move(scrolledThumb.x + scrolledThumb.width / 2, scrolledThumb.y + scrolledThumb.height / 2);
+  await page.mouse.down(); await page.mouse.move(scrolledThumb.x + scrolledThumb.width / 2, verticalTrack.y + 12, { steps: 8 }); await page.mouse.up();
+  await expect(card).toBeVisible();
+  await page.setViewportSize({ width: 820, height: 820 });
+  await expect.poll(async () => (await root.boundingBox())!.width).toBeLessThan(bounds.width);
+  await assertBoundedAndClickable();
+  if (split && side === 'right' && multiline) await page.screenshot({ path: 'test-results/threadhold-fixed-split.png' });
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue('Updated local draft');
+  await editor.fill('Discard this edit');
+  await root.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(card.locator('.th-body')).toHaveText('Updated local draft');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await card.getByRole('button', { name: 'Delete draft', exact: true }).click();
+  await card.getByRole('button', { name: 'Yes, delete draft', exact: true }).click();
+  await expect(root.locator('[data-threadhold-slot]')).toHaveCount(0);
+  expect(writes).toBe(0);
+});
+}
+
+test('All Changes keyboard activation preserves an unchanged left-line anchor', async () => {
+  await page.goto(`${url}?_a=files&table-diff=1`);
+  const section = page.locator('.repos-summary-header');
+  await section.getByRole('button', { name: 'Add left comment on line 35', exact: true }).press('Enter');
+  await page.getByRole('textbox', { name: 'Table inline comment', exact: true }).fill('Keyboard draft');
+  await section.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+  await expect(section.locator('[data-threadhold-card] .th-body')).toHaveText('Keyboard draft');
+  expect(writes).toBe(0);
+  const sent = page.waitForRequest(request => request.method() === 'POST');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
+  expect((await sent).postDataJSON().threadContext).toEqual({
+    filePath: '/src/file-with-hyphens.ts',
+    leftFileStart: { line: 35, offset: 1 }, leftFileEnd: { line: 35, offset: 1 },
+  });
+  await expect(section.locator('[data-threadhold-card]')).toHaveCount(0);
+});
+
+test('All Changes rejects a cross-side selection without losing native editor text', async () => {
+  await page.goto(`${url}?_a=files&table-diff=1&split=1`);
+  await dragNativeTableSelection('left', 'right');
+  const section = page.locator('.repos-summary-header');
+  await section.getByRole('button', { name: 'Add right comment on line 38', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Table inline comment', exact: true });
+  await editor.fill('Keep this ambiguous selection text');
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(section.locator('[data-threadhold-action="save"]')).toHaveCount(0);
+  await expect(editor).toHaveValue('Keep this ambiguous selection text');
+  await expect(section.getByRole('button', { name: 'Comment', exact: true })).toBeVisible();
+  expect(writes).toBe(0);
+});
+
+for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const entry of ['F4', 'selected-text click', 'selected-text keyboard']) {
+test(`English native ${entry} ${split ? 'split' : 'inline'} ${side} suggestions retain Markdown and range`, async () => {
+  await page.goto(`${url}?_a=files&path=/src/example.ts&real-monaco=1${split ? '&split=1' : ''}`);
+  await expect(page.locator('[data-real-diff][data-ready]')).toBeVisible();
+  const root = page.locator(side === 'left' ? '.original-in-monaco-diff-editor' : '.modified-in-monaco-diff-editor');
+  const code = root.locator('textarea.inputarea');
+  await code.focus(); await code.press('Control+Home');
+  await code.press('ArrowDown'); await code.press('ArrowDown');
+  await code.press('Shift+ArrowDown'); await code.press('Shift+ArrowDown');
+  if (entry === 'F4') await code.press('F4');
+  else {
+    const selectedText = root.getByRole('button', { name: 'Comment selected text', exact: true });
+    if (entry === 'selected-text click') await selectedText.click();
+    else { await selectedText.focus(); await selectedText.press('Enter'); }
+  }
+  const editor = root.getByRole('textbox', { name: 'Inline comment', exact: true });
+  await expect(editor).toBeVisible();
+  await root.getByRole('button', { name: 'Insert a suggestion', exact: true }).click();
+  const body = '```suggestion\n' + [3, 4].map(line => `const line${line} = "${'long content '.repeat(18)}";`).join('\n') + '\n\n```\n';
+  await expect(editor).toHaveValue(body);
+  await root.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = root.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body pre code')).toContainText('const line3 =');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await page.reload();
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue(body);
+  await root.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  expect(writes).toBe(0);
+  const sent = page.waitForRequest(request => request.method() === 'POST');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Publish drafts (1)', exact: true }).click();
+  const payload = (await sent).postDataJSON();
+  expect(payload.comments[0].content).toBe(body);
+  expect(payload.threadContext).toEqual({
+    filePath: '/src/example.ts',
+    [side === 'left' ? 'leftFileStart' : 'rightFileStart']: { line: 3, offset: 1 },
+    [side === 'left' ? 'leftFileEnd' : 'rightFileEnd']: { line: 5, offset: 1 },
+  });
+  await expect(card).toHaveCount(0);
+});
+}
+
+test('English native F4 without a selection drafts a suggestion for the whole line', async () => {
+  await page.goto(`${url}?_a=files&path=/src/example.ts&real-monaco=1`);
+  await expect(page.locator('[data-real-diff][data-ready]')).toBeVisible();
+  const root = page.locator('.modified-in-monaco-diff-editor');
+  const code = root.locator('textarea.inputarea');
+  await code.focus(); await code.press('Control+Home');
+  await code.press('ArrowDown'); await code.press('ArrowDown'); await code.press('ArrowRight');
+  await code.press('F4');
+  await root.getByRole('button', { name: 'Insert a suggestion', exact: true }).click();
+  const sourceLine = `const line3 = "${'long content '.repeat(18)}";`;
+  const body = '```suggestion\n' + sourceLine + '\n```\n';
+  await expect(root.getByRole('textbox', { name: 'Inline comment', exact: true })).toHaveValue(body);
+  await root.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = root.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body pre code')).toHaveText(sourceLine + '\n');
+  expect(writes).toBe(0);
+  const sent = page.waitForRequest(request => request.method() === 'POST');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Publish drafts (1)', exact: true }).click();
+  const payload = (await sent).postDataJSON();
+  expect(payload.comments[0].content).toBe(body);
+  expect(payload.threadContext).toEqual({
+    filePath: '/src/example.ts',
+    rightFileStart: { line: 3, offset: 1 }, rightFileEnd: { line: 3, offset: sourceLine.length + 1 },
+  });
+  await expect(card).toHaveCount(0);
+});
+
+for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) for (const entry of multiline ? ['F4', 'selected-text click', 'selected-text keyboard'] : ['F4']) {
+test(`English narrow native panel ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline suggestion' : 'single-line comment'} via ${entry} saves and reopens the same draft`, async () => {
+  await page.setViewportSize({ width: 700, height: 820 });
+  await page.goto(`${url}?_a=files&path=/src/example.ts&real-monaco=1${split ? '&split=1' : ''}`);
+  await expect(page.locator('[data-real-diff][data-ready]')).toBeVisible();
+  const root = page.locator(side === 'left' ? '.original-in-monaco-diff-editor' : '.modified-in-monaco-diff-editor');
+  const code = root.locator('textarea.inputarea');
+  await code.focus(); await code.press('Control+Home');
+  await code.press('ArrowDown'); await code.press('ArrowDown');
+  if (multiline) { await code.press('Shift+ArrowDown'); await code.press('Shift+ArrowDown'); }
+  else await code.press('ArrowRight');
+  if (entry === 'F4') await code.press('F4');
+  else {
+    const selectedText = root.getByRole('button', { name: 'Comment selected text', exact: true });
+    if (entry === 'selected-text click') await selectedText.click();
+    else { await selectedText.focus(); await selectedText.press('Enter'); }
+  }
+  const panel = page.locator('.bolt-panel');
+  const editor = panel.getByRole('textbox', { name: 'Inline comment', exact: true });
+  const body = multiline ? '```suggestion\n' + [3, 4].map(line => `const line${line} = "${'long content '.repeat(18)}";`).join('\n') + '\n\n```\n' : 'Single-line panel comment';
+  if (multiline) await panel.getByRole('button', { name: 'Insert a suggestion', exact: true }).click();
+  else await editor.fill(body);
+  await expect(editor).toHaveValue(body);
+  await panel.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = root.locator('[data-threadhold-card]');
+  if (multiline) await expect(card.locator('.th-body pre code')).toContainText('const line3 =');
+  else await expect(card.locator('.th-body')).toHaveText(body);
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await page.reload();
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue(body);
+  await expect(panel.getByRole('button', { name: 'Save', exact: true })).toHaveCount(1);
+  await editor.press('Control+Enter');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  expect(writes).toBe(0);
+  const sent = page.waitForRequest(request => request.method() === 'POST');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Publish drafts (1)', exact: true }).click();
+  const payload = (await sent).postDataJSON();
+  expect(payload.comments[0].content).toBe(body);
+  expect(payload.threadContext).toEqual({
+    filePath: '/src/example.ts',
+    [side === 'left' ? 'leftFileStart' : 'rightFileStart']: { line: 3, offset: 1 },
+    [side === 'left' ? 'leftFileEnd' : 'rightFileEnd']: { line: multiline ? 5 : 3, offset: multiline ? 1 : `const line3 = "${'long content '.repeat(18)}";`.length + 1 },
+  });
+  await expect(card).toHaveCount(0);
+});
+}

@@ -45,12 +45,32 @@ export interface MonacoModel {
   getLineMaxColumn(lineNumber: number): number;
 }
 export interface MonacoDisposable { dispose(): void }
-export interface MonacoViewZone { afterLineNumber: number; heightInPx: number; domNode: HTMLElement; suppressMouseDown?: boolean }
+export interface MonacoViewZone {
+  afterLineNumber: number;
+  heightInPx: number;
+  domNode: HTMLElement;
+  suppressMouseDown?: boolean;
+  onDomNodeTop?(top: number): void;
+}
 export interface MonacoZoneAccessor {
   addZone(zone: MonacoViewZone): string;
   removeZone(id: string): void;
   layoutZone(id: string): void;
 }
+export interface MonacoOverlayWidget {
+  getId(): string;
+  getDomNode(): HTMLElement;
+  getPosition(): null;
+}
+export interface MonacoLayoutInfo {
+  width: number;
+  height: number;
+  contentLeft: number;
+  contentWidth: number;
+  verticalScrollbarWidth: number;
+  horizontalScrollbarHeight: number;
+}
+export interface MonacoScrollEvent { scrollTop: number }
 export interface MonacoEditor {
   getDomNode(): HTMLElement | null;
   getModel(): MonacoModel | null;
@@ -59,6 +79,12 @@ export interface MonacoEditor {
   revealRangeInCenter(range: MonacoRange): void;
   focus(): void;
   changeViewZones(callback: (accessor: MonacoZoneAccessor) => void): void;
+  addOverlayWidget(widget: MonacoOverlayWidget): void;
+  removeOverlayWidget(widget: MonacoOverlayWidget): void;
+  getLayoutInfo(): MonacoLayoutInfo;
+  getScrollTop(): number;
+  onDidLayoutChange(callback: () => void): MonacoDisposable;
+  onDidScrollChange(callback: (event: MonacoScrollEvent) => void): MonacoDisposable;
   onDidDispose(callback: () => void): MonacoDisposable;
   onDidChangeModel(callback: () => void): MonacoDisposable;
 }

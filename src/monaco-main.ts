@@ -1,14 +1,14 @@
 import { parsePrRoute } from './routes';
 import { captureDiscussionRange, equalMonacoRange, validMonacoRange } from './monaco-range';
 import type { Anchor, Scope } from './contracts';
-import type { MonacoBinding, MonacoCommand, MonacoContext, MonacoEditor, MonacoModel, MonacoNamespace, MonacoRange, MonacoViewZone } from './monaco-types';
+import type { MonacoBinding, MonacoCommand, MonacoContext, MonacoDisposable, MonacoEditor, MonacoModel, MonacoNamespace, MonacoOverlayWidget, MonacoRange, MonacoViewZone } from './monaco-types';
 import { t } from './i18n';
 
 interface CapturedEditor { editor: MonacoEditor; root: HTMLElement; dispose(): void }
 interface NativeSnapshot { root: HTMLElement; uri: string; range?: MonacoRange }
-interface DraftZone { editor: MonacoEditor; id: string; node: HTMLElement; zone: MonacoViewZone; resize: ResizeObserver }
+interface DraftZone { editor: MonacoEditor; node: HTMLElement; afterLineNumber: number; dispose(): void }
 interface ModelIdentity { repositoryId: string; commit: string; filePath: string }
-const nativeSelector = '.repos-discussion-thread-reply .repos-comment-editor-fit textarea[class*="threadId--"]:not([aria-hidden="true"])';
+const nativeSelector = '.repos-discussion-thread-reply .repos-comment-editor-fit textarea[class*="threadId--"]:not([aria-hidden="true"]):not(.bolt-textfield-auto-adjust-hidden)';
 
 export function parseMonacoModelUri(uri: string): ModelIdentity | undefined {
   try {
@@ -64,9 +64,63 @@ export function installMonacoController(): void {
   function removeZone(id: string) {
     const item = zones.get(id);
     if (!item) return;
-    zones.delete(id); item.resize.disconnect();
-    try { item.editor.changeViewZones(accessor => accessor.removeZone(item.id)); } catch { /* Already disposed. */ }
-    item.node.remove();
+    zones.delete(id); item.dispose();
+  }
+  function mountZone(id: string, anchor: Anchor, editor: MonacoEditor): DraftZone {
+    const node = document.createElement('div');
+    node.className = 'th-monaco-slot repos-discussion-thread'; node.dataset.threadholdSlot = id;
+    Object.assign(node.style, { position: 'absolute', width: '100%', maxWidth: '100%', minWidth: '0', boxSizing: 'border-box', overflowWrap: 'anywhere', pointerEvents: 'auto' });
+    // A viewzone reserves document space only. Its scroll-width-sized DOM is
+    // underneath Monaco's text layer and must never host interactive content.
+    const placeholder = document.createElement('div');
+    placeholder.setAttribute('aria-hidden', 'true');
+    const viewport = document.createElement('div');
+    Object.assign(viewport.style, { position: 'absolute', top: '0', overflow: 'hidden', pointerEvents: 'none' });
+    viewport.append(node);
+    const overlay: MonacoOverlayWidget = {
+      getId: () => `threadhold-draft:${id}`, getDomNode: () => viewport, getPosition: () => null,
+    };
+    let top: number | undefined, scrollTop = editor.getScrollTop(), zoneId = '', disposed = false;
+    const subscriptions: MonacoDisposable[] = [];
+    const zone: MonacoViewZone = {
+      afterLineNumber: anchor.end!.line, heightInPx: 1, domNode: placeholder, suppressMouseDown: false,
+      onDomNodeTop(value) { top = value; scrollTop = editor.getScrollTop(); position(); },
+    };
+    function position() {
+      if (disposed) return;
+      const layout = editor.getLayoutInfo();
+      const width = Math.max(0, Math.min(layout.contentWidth, layout.width - layout.contentLeft) - layout.verticalScrollbarWidth);
+      const height = Math.max(0, layout.height - layout.horizontalScrollbarHeight);
+      viewport.style.left = `${layout.contentLeft}px`;
+      viewport.style.width = `${width}px`; viewport.style.height = `${height}px`;
+      node.style.top = `${top ?? 0}px`;
+      node.style.visibility = top === undefined || top + zone.heightInPx <= 0 || top >= height || width === 0 ? 'hidden' : 'visible';
+    }
+    const resize = new ResizeObserver(() => {
+      if (disposed) return;
+      const height = Math.max(1, Math.ceil(Math.max(node.scrollHeight, node.getBoundingClientRect().height)));
+      if (zone.heightInPx === height) return;
+      zone.heightInPx = height;
+      try { editor.changeViewZones(accessor => accessor.layoutZone(zoneId)); position(); } catch { removeZone(id); }
+    });
+    editor.addOverlayWidget(overlay);
+    editor.changeViewZones(accessor => { zoneId = accessor.addZone(zone); });
+    subscriptions.push(editor.onDidLayoutChange(position), editor.onDidScrollChange(event => {
+      if (top !== undefined) top -= event.scrollTop - scrollTop;
+      scrollTop = event.scrollTop; position();
+    }));
+    resize.observe(node); position();
+    return {
+      editor, node, afterLineNumber: zone.afterLineNumber,
+      dispose() {
+        if (disposed) return;
+        disposed = true; resize.disconnect();
+        for (const subscription of subscriptions) subscription.dispose();
+        try { editor.removeOverlayWidget(overlay); } catch { /* Already disposed. */ }
+        try { editor.changeViewZones(accessor => accessor.removeZone(zoneId)); } catch { /* Already disposed. */ }
+        viewport.remove(); placeholder.remove(); node.remove();
+      },
+    };
   }
   function clear() {
     for (const id of zones.keys()) removeZone(id);
@@ -106,25 +160,52 @@ export function installMonacoController(): void {
     if (!identity || identity.commit.toLowerCase() !== sourceCommit.toLowerCase()) return;
     return { ...identity, commit: targetCommit };
   }
+  function nativeSnapshot(root: HTMLElement, panel = false): NativeSnapshot | undefined {
+    if (!root.isConnected || !root.getClientRects().length || !sideOf(root)) return;
+    const model = modelFor(root);
+    const instance = [...captured].find(item => item.root === root)?.editor;
+    if (!model || !instance) return;
+    const requested = pending.get(instance);
+    const opening = openings.get(root);
+    const openedRange = opening?.uri === model.uri.toString() ? opening.range : undefined;
+    const decorations = model.getAllDecorations();
+    let range = requested ? rangeOf(requested) : openedRange ?? captureDiscussionRange(decorations, instance.getSelection());
+    if (panel && !requested && !captureDiscussionRange(decorations, range ?? null)) {
+      const highlighted = decorations.filter(item => item.options.inlineClassName === 'highlight-discussion-range' && validMonacoRange(item.range));
+      const unique = highlighted.filter((item, index) => highlighted.findIndex(other => equalMonacoRange(item.range, other.range)) === index);
+      range = unique.length === 1 ? unique[0]!.range : undefined;
+    }
+    if (!range) return;
+    return { root, uri: model.uri.toString(), range: { ...range } };
+  }
   function captureNativeEditors() {
     if (!parsePrRoute(location.href)) return;
-    for (const textarea of document.querySelectorAll<HTMLTextAreaElement>(nativeSelector)) {
+    const textareas = [...document.querySelectorAll<HTMLTextAreaElement>(nativeSelector)];
+    const panelEditors = textareas.filter(textarea => textarea.closest('.bolt-panel .repos-editor-discussion-host') && !textarea.closest('.monaco-editor') && textarea.getClientRects().length);
+    for (const textarea of textareas) {
       if (snapshots.has(textarea)) continue;
       const root = textarea.closest<HTMLElement>('.monaco-editor');
-      if (!root || !sideOf(root)) continue;
-      const model = modelFor(root);
-      if (!model) continue;
-      const instance = [...captured].find(item => item.root === root)?.editor;
-      if (!instance) continue;
-      const requested = pending.get(instance);
-      const opening = openings.get(root);
-      const openedRange = opening?.uri === model.uri.toString() ? opening.range : undefined;
-      const range = requested ? rangeOf(requested) : openedRange ?? captureDiscussionRange(model.getAllDecorations(), instance.getSelection());
-      if (!range) continue;
-      snapshots.set(textarea, { root, uri: model.uri.toString(), range });
+      let snapshot = root ? nativeSnapshot(root) : undefined;
+      if (!root && panelEditors.length === 1 && panelEditors[0] === textarea) {
+        const candidates: NativeSnapshot[] = [];
+        for (const owner of captured) {
+          const candidate = nativeSnapshot(owner.root, true);
+          if (candidate) candidates.push(candidate);
+        }
+        const requested = candidates.filter(candidate => [...captured].some(owner => owner.root === candidate.root && pending.has(owner.editor)));
+        const opened = candidates.filter(candidate => {
+          const opening = openings.get(candidate.root);
+          return opening?.uri === candidate.uri && !!candidate.range && equalMonacoRange(opening.range, candidate.range);
+        });
+        const owners = requested.length ? requested : opened.length ? opened : candidates;
+        if (owners.length === 1) snapshot = owners[0];
+      }
+      if (!snapshot) continue;
+      snapshots.set(textarea, snapshot);
       textarea.dataset.threadholdMonacoEditor = crypto.randomUUID();
-      if (instance && requested) pending.delete(instance);
-      openings.delete(root);
+      const instance = [...captured].find(item => item.root === snapshot.root)?.editor;
+      if (instance) pending.delete(instance);
+      openings.delete(snapshot.root);
     }
   }
   function bindings(context: MonacoContext): MonacoBinding[] {
@@ -186,22 +267,9 @@ export function installMonacoController(): void {
       if (native.some(binding => sameLocation(binding.anchor, slot.anchor))) continue;
       keep.add(slot.id);
       const old = zones.get(slot.id);
-      if (old?.editor === match.editor && old.node.isConnected) continue;
+      if (old?.editor === match.editor && old.node.isConnected && old.afterLineNumber === slot.anchor.end!.line) continue;
       removeZone(slot.id);
-      const node = document.createElement('div');
-      node.className = 'th-monaco-slot repos-discussion-thread'; node.dataset.threadholdSlot = slot.id;
-      node.style.width = '100%'; node.style.boxSizing = 'border-box';
-      const host = document.createElement('div'); host.append(node);
-      const zone: MonacoViewZone = { afterLineNumber: slot.anchor.end!.line, heightInPx: 1, domNode: host, suppressMouseDown: false };
-      let zoneId = '';
-      match.editor.changeViewZones(accessor => { zoneId = accessor.addZone(zone); });
-      const resize = new ResizeObserver(() => {
-        const height = Math.max(1, Math.ceil(node.scrollHeight));
-        if (zone.heightInPx === height) return;
-        zone.heightInPx = height;
-        try { match.editor.changeViewZones(accessor => accessor.layoutZone(zoneId)); } catch { removeZone(slot.id); }
-      });
-      zones.set(slot.id, { editor: match.editor, id: zoneId, node, zone, resize }); resize.observe(node);
+      zones.set(slot.id, mountZone(slot.id, slot.anchor, match.editor));
     }
     for (const id of zones.keys()) if (!keep.has(id)) removeZone(id);
   }
@@ -237,21 +305,30 @@ export function installMonacoController(): void {
   function rememberNativeRange(event: Event) {
     if (!parsePrRoute(location.href) || !(event.target instanceof Element)) return;
     if (event.type === 'click' && event instanceof MouseEvent && event.detail !== 0) return;
-    const button = event.target.closest('[widgetid$=":AddCommentGutterWidget"] button.repos-add-comment-button, [widgetid$=":AddCommentWidget"] button.repos-add-comment-button');
-    const root = button?.closest<HTMLElement>('.monaco-editor');
+    const keyboard = event instanceof KeyboardEvent;
+    const selectedTextShortcut = keyboard && event.key === 'F4' && !!event.target.closest('.inputarea');
+    if (keyboard && !selectedTextShortcut && event.key !== 'Enter' && event.key !== ' ') return;
+    const action = selectedTextShortcut ? event.target : event.target.closest('[widgetid$=":AddCommentGutterWidget"] button.repos-add-comment-button, [widgetid$=":AddCommentWidget"] button.repos-add-comment-button');
+    const root = action?.closest<HTMLElement>('.monaco-editor');
     const editor = root && [...captured].find(item => item.root === root)?.editor;
     const model = editor?.getModel(), selection = editor?.getSelection();
     if (!root || !model || !selection || !validMonacoRange(selection)) return;
-    openings.set(root, { uri: model.uri.toString(), range: { startLineNumber: selection.startLineNumber, startColumn: selection.startColumn, endLineNumber: selection.endLineNumber, endColumn: selection.endColumn } });
+    let range: MonacoRange = { startLineNumber: selection.startLineNumber, startColumn: selection.startColumn, endLineNumber: selection.endLineNumber, endColumn: selection.endColumn };
+    if (selectedTextShortcut && range.startLineNumber === range.endLineNumber && range.startColumn === range.endColumn) {
+      range = { ...range, startColumn: 1, endColumn: model.getLineMaxColumn(range.endLineNumber) };
+    }
+    openings.set(root, { uri: model.uri.toString(), range });
   }
   document.addEventListener('pointerdown', rememberNativeRange, true);
   document.addEventListener('click', rememberNativeRange, true);
+  document.addEventListener('keydown', rememberNativeRange, true);
   observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-uri'] });
   window.addEventListener('popstate', schedule);
   window.addEventListener('pagehide', () => {
     clear(); observer.disconnect();
     document.removeEventListener('pointerdown', rememberNativeRange, true);
     document.removeEventListener('click', rememberNativeRange, true);
+    document.removeEventListener('keydown', rememberNativeRange, true);
     for (const item of [...captured]) item.dispose();
   }, { once: true });
 
@@ -278,9 +355,9 @@ export function installMonacoController(): void {
     function find() {
       if (!match!.root.isConnected || !parsePrRoute(location.href)) return;
       captureNativeEditors();
-      const available = [...match!.root.querySelectorAll<HTMLTextAreaElement>(nativeSelector)].some(textarea => {
+      const available = [...document.querySelectorAll<HTMLTextAreaElement>(nativeSelector)].some(textarea => {
         const snapshot = snapshots.get(textarea);
-        return snapshot?.range && equalMonacoRange(snapshot.range, range!);
+        return snapshot?.root === match!.root && snapshot.range && equalMonacoRange(snapshot.range, range!);
       });
       if (available) { wait.disconnect(); clearTimeout(timer); resolve(); return; }
       if (clicked) return;
@@ -295,7 +372,7 @@ export function installMonacoController(): void {
         clicked = true; buttons[0]!.click(); return;
       }
     }
-    wait.observe(match.root, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'disabled', 'hidden'] });
+    wait.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'disabled', 'hidden'] });
     find(); await promise;
   }
   window.__threadholdMonaco = {

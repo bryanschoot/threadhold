@@ -11,9 +11,9 @@ De interface volgt de browsertaal: Engels standaard, Nederlands voor `nl`-locale
 ## Werking
 
 1. Schrijf in de **bestaande Azure DevOps-commenteditor** en kies **Opslaan als draft**.
-2. De bevestigde draft verschijnt tussen de gewone comments, met native typografie, avatar, een kleine **Draft**-badge en bewerk-/verwijdericonen. Geen extra tab.
+2. De bevestigde draft verschijnt tussen de gewone comments, met lokaal gerenderde en gesanitiseerde Markdown, native typografie, avatar, een kleine **Draft**-badge en bewerk-/verwijdericonen. Geen extra tab.
 3. Het potlood opent dezelfde native editor. **Opslaan** en Ctrl+Enter bewaren de wijziging lokaal; **Cancel** behoudt de laatst opgeslagen versie.
-4. Alleen **Drafts plaatsen (n)** naast **Approve** publiceert opgeslagen drafts, na bevestiging. De gewone, niet aan een draft gekoppelde Azure DevOps-commentacties blijven ongewijzigd.
+4. Alleen **Drafts plaatsen (n)** naast **Approve** — of naast de native **Publish**-actie bij een draft-PR — publiceert opgeslagen drafts, na bevestiging. De gewone, niet aan een draft gekoppelde Azure DevOps-commentacties blijven ongewijzigd.
 
 Dit geldt voor inline comments, algemene PR-comments en replies. Een agent voert create/read/update/delete uit via dezelfde browserbediening, met stabiele labels en draft-IDs. Er is geen afzonderlijke agent-CLI nodig; een shellagent zonder browsertoegang kan deze extensie niet bedienen.
 

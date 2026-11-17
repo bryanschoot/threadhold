@@ -1,5 +1,6 @@
 import type { Draft } from './contracts';
 import { t } from './i18n';
+import { renderMarkdown } from './markdown';
 
 export interface DraftUiActions {
   edit(draft: Draft): void | Promise<void>;
@@ -82,27 +83,92 @@ function localState(draft: Draft): string {
   return t(`${state} · revision ${draft.revision}`, `${state} · revisie ${draft.revision}`);
 }
 
-function authorAvatar(author: string): HTMLElement {
+function normalizedIdentity(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function imageIdentifiesUser(image: HTMLImageElement, userId: string): boolean {
+  try {
+    const url = new URL(image.currentSrc || image.src, document.baseURI);
+    if (url.origin !== location.origin) return false;
+    const identity = userId.toLowerCase();
+    if (url.pathname.split('/').some(part => decodeURIComponent(part).toLowerCase() === identity)) return true;
+    for (const [key, value] of url.searchParams) {
+      const parameter = key.toLowerCase();
+      if ((parameter === 'id' || parameter === 'userid' || parameter === 'identityid')
+        && value.toLowerCase() === identity) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function authorPersona(author: string, userId: string): { avatar: HTMLElement; displayName: string } {
   const avatar = element('div', 'bolt-coin flex-noshrink repos-comment-header-persona size24');
   avatar.setAttribute('aria-hidden', 'true');
-  const identity = author.trim().toLocaleLowerCase();
-  const coins = document.querySelectorAll<HTMLElement>('.repos-discussion-thread-reply .bolt-coin[aria-label], .repos-discussion-comment .bolt-coin[aria-label]');
-  for (const coin of coins) {
+  const identity = normalizedIdentity(author);
+  const candidates = document.querySelectorAll<HTMLElement>('.bolt-coin[aria-label], .ms-Persona[aria-label]');
+  for (const coin of candidates) {
     if (coin.closest('[data-threadhold-card]')) continue;
-    const label = coin.getAttribute('aria-label')?.trim().toLocaleLowerCase();
-    if (!identity || !label || !(label === identity || label.startsWith(`${identity}-`) || label.startsWith(`${identity} -`))) continue;
+    const label = coin.getAttribute('aria-label')?.trim() || '';
     const image = coin.querySelector('img');
-    if (!image || new URL(image.currentSrc || image.src, document.baseURI).origin !== location.origin) continue;
-    const copy = element('img', 'bolt-coin-content using-image size24');
-    copy.src = image.currentSrc || image.src;
-    copy.alt = '';
-    avatar.append(copy);
-    avatar.setAttribute('aria-label', coin.getAttribute('aria-label') || author);
-    return avatar;
+    const identityNode = coin.closest<HTMLElement>('[data-user-id], [data-identity-id]');
+    const nativeId = identityNode?.dataset.userId || identityNode?.dataset.identityId;
+    if (nativeId && nativeId.toLowerCase() !== userId.toLowerCase()) continue;
+    const matchesId = Boolean(userId) && (nativeId?.toLowerCase() === userId.toLowerCase()
+      || Boolean(image && imageIdentifiesUser(image, userId)));
+    // A name prefix is not identity proof: it can belong to another reviewer.
+    if (!matchesId && (!identity || normalizedIdentity(label) !== identity)) continue;
+    let displayName = label || author;
+    const nativeComment = coin.closest('.repos-discussion-comment, .repos-discussion-thread-reply, .ms-Persona');
+    const nativeName = nativeComment?.querySelector<HTMLElement>('.repos-discussion-comment-header .font-weight-semibold, .ms-Persona-primaryText')?.textContent?.trim();
+    if (nativeName && (matchesId || normalizedIdentity(nativeName) === identity)) displayName = nativeName;
+    if (image) {
+      try {
+        const url = new URL(image.currentSrc || image.src, document.baseURI);
+        if (url.origin === location.origin && (url.protocol === 'https:' || url.protocol === 'http:')) {
+          const copy = element('img', 'bolt-coin-content using-image size24');
+          copy.src = url.href;
+          copy.alt = '';
+          avatar.append(copy);
+          return { avatar, displayName };
+        }
+      } catch {
+        // Invalid or cross-origin native images are not copied.
+      }
+    }
+    avatar.classList.add('th-avatar-fallback');
+    avatar.textContent = displayName.split(/\s+/).slice(0, 2).map(part => part.charAt(0)).join('').toLocaleUpperCase() || '?';
+    return { avatar, displayName };
   }
   avatar.classList.add('th-avatar-fallback');
-  avatar.textContent = author.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toLocaleUpperCase() || '?';
-  return avatar;
+  avatar.textContent = author.trim().split(/\s+/).slice(0, 2).map(part => part.charAt(0)).join('').toLocaleUpperCase() || '?';
+  return { avatar, displayName: author };
+}
+
+function updateTimestamp(timestamp: HTMLTimeElement): void {
+  const elapsed = Math.max(0, Date.now() - Date.parse(timestamp.dateTime));
+  const minutes = Math.floor(elapsed / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const text = minutes < 1 ? t('Just now', 'Zojuist')
+    : hours < 1 ? t(`${minutes}m ago`, `${minutes}m geleden`)
+      : days < 1 ? t(`${hours}h ago`, `${hours}u geleden`)
+        : t(`${days}d ago`, `${days}d geleden`);
+  if (timestamp.textContent !== text) timestamp.textContent = text;
+}
+
+let timestampRefresh: number | undefined;
+
+function scheduleTimestampRefresh(): void {
+  if (timestampRefresh !== undefined) return;
+  timestampRefresh = window.setTimeout(() => {
+    timestampRefresh = undefined;
+    const timestamps = document.querySelectorAll<HTMLTimeElement>('.th-card .th-timestamp');
+    for (const timestamp of timestamps) updateTimestamp(timestamp);
+    if (timestamps.length > 0) scheduleTimestampRefresh();
+  }, 60_000);
 }
 
 function iconButton(label: string, action: 'edit' | 'delete', icon: 'Edit' | 'Delete', draft: Draft): HTMLButtonElement {
@@ -120,30 +186,37 @@ function iconButton(label: string, action: 'edit' | 'delete', icon: 'Edit' | 'De
 }
 
 export function createDraftCard(draft: Draft, author: string, stale: boolean, actions: DraftUiActions): HTMLElement {
-  const card = element('article', 'th-card repos-comment-viewer');
+  const general = draft.anchor.kind === 'general';
+  const card = element('article', general
+    ? 'th-card th-card-general repos-comment-viewer bolt-card bolt-card-white depth-8 flex-column'
+    : 'th-card repos-comment-viewer');
   card.dataset.threadholdCard = '';
   card.dataset.threadholdState = draft.state;
   bindDraft(card, draft);
   card.setAttribute('aria-label', t(`Draft by ${author}`, `Draft van ${author}`));
-  const comment = element('div', 'repos-discussion-comment flex-column');
-  const row = element('div', 'flex-row');
-  const avatar = authorAvatar(author);
-  const displayAuthor = avatar.getAttribute('aria-label') || author;
+  const comment = element('div', general
+    ? 'th-card-frame bolt-card-content repos-discussion-comment flex-column'
+    : 'repos-discussion-comment flex-column');
+  const row = element('div', 'th-comment-row flex-row');
+  const { avatar, displayName: displayAuthor } = authorPersona(author, draft.scope.userId);
   card.setAttribute('aria-label', t(`Draft by ${displayAuthor}`, `Draft van ${displayAuthor}`));
   const content = element('div', 'th-comment-content repos-comment-editor-fit flex-column flex-grow scroll-hidden padding-left-8');
-  const header = element('div', 'repos-discussion-comment-header flex-row flex-grow flex-center rhythm-horizontal-4 margin-bottom-8');
-  const identity = element('div', 'scroll-hidden flex-row flex-center');
+  const header = element('div', 'th-comment-header repos-discussion-comment-header flex-row flex-grow flex-center rhythm-horizontal-4 margin-bottom-8');
+  const identity = element('div', 'th-author scroll-hidden flex-row flex-center');
   identity.append(element('span', 'font-weight-semibold padding-right-8 text-ellipsis', displayAuthor));
-  const timestamp = element('time', 'body-s secondary-text margin-right-4 bolt-time-item white-space-nowrap');
+  const timestamp = element('time', 'th-timestamp body-s secondary-text margin-right-4 bolt-time-item white-space-nowrap');
   timestamp.dateTime = draft.updatedAt;
-  timestamp.textContent = new Date(draft.updatedAt).toLocaleString(globalThis.navigator?.language);
+  timestamp.title = new Date(draft.updatedAt).toLocaleString(globalThis.navigator?.language);
+  updateTimestamp(timestamp);
+  scheduleTimestampRefresh();
   const badge = element('span', 'th-badge', t('Draft', 'Draft'));
   badge.title = t('Saved locally · only visible to you', 'Lokaal opgeslagen · alleen voor jou');
-  const toolbar = element('div', 'flex-row flex-grow flex-noshrink justify-end flex-center');
+  const toolbar = element('div', 'th-toolbar flex-row flex-noshrink justify-end flex-center');
   toolbar.setAttribute('role', 'group');
   toolbar.setAttribute('aria-label', t('Draft actions', 'Draftacties'));
   header.append(identity, timestamp, badge, toolbar);
-  const body = element('div', 'th-body markdown-content markdown-editor-preview repos-comment-editor-max-width markdown-preview-checkbox-indent', draft.body);
+  const body = element('div', 'th-body markdown-content markdown-editor-preview repos-comment-editor-max-width markdown-preview-checkbox-indent');
+  body.append(renderMarkdown(draft.body));
   const recovery = element('div', 'th-actions');
   const edit = iconButton(t('Edit', 'Bewerken'), 'edit', 'Edit', draft);
   const remove = iconButton(t('Delete draft', 'Draft verwijderen'), 'delete', 'Delete', draft);
@@ -385,7 +458,7 @@ export function createDraftHelp(): { button: HTMLButtonElement; dispose(): void 
     'Gebruik toegankelijke knopnamen of deze stabiele DOM-attributen. Beperk bewerk- en verwijderacties tot de bedoelde draftkaart. Een klik is geen opslagbevestiging: wacht op de resulterende kaart, revisie of verwijdering. Statusmeldingen gebruiken data-threadhold-status en role=status/alert; bezette bediening gebruikt aria-busy.',
   ));
   const attributes = element('pre', '');
-  attributes.textContent = '[data-threadhold-card]\n  data-threadhold-draft-id: stable ID\n  data-threadhold-revision: saved revision\n  data-threadhold-state: saved | sending | unknown\n  .th-body: saved text\n[data-threadhold-action="save"]\n[data-threadhold-action="edit"]\n[data-threadhold-action="delete"]';
+  attributes.textContent = '[data-threadhold-card]\n  data-threadhold-draft-id: stable ID\n  data-threadhold-revision: saved revision\n  data-threadhold-state: saved | sending | unknown\n  .th-body: rendered saved Markdown (edit in the native editor)\n[data-threadhold-action="save"]\n[data-threadhold-action="edit"]\n[data-threadhold-action="delete"]';
   const deletion = element('p', '', t(
     'Both the trash button and its initially hidden confirmation use the delete action. Choose the visible, named Delete draft button, then Yes, delete draft; do not click an unfiltered delete selector.',
     'De prullenbak en de aanvankelijk verborgen bevestiging gebruiken beide de delete-actie. Kies de zichtbare knop Draft verwijderen en daarna Ja, draft verwijderen; klik niet op een ongefilterde delete-selector.',
