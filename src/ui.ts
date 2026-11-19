@@ -355,39 +355,51 @@ export interface SaveControl {
   button: HTMLButtonElement;
   setBinding(draft?: Draft): void;
   setEditing(editing: boolean): void;
-  report(message: string, error?: boolean): void;
+  report(message: string, kind?: 'message' | 'saved'): void;
+  reset(): void;
 }
-export function createSaveControl(onSave: () => void | Promise<void>): SaveControl {
+export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<void>): SaveControl {
   const container = element('div', 'th-save');
   const button = actionButton(t('Save as draft', 'Opslaan als draft'), 'save');
   button.title = t('Save locally as a draft · only visible to you', 'Lokaal opslaan als draft · alleen voor jou');
   const status = liveStatus();
   container.append(button, status);
   let binding: Draft | undefined;
-  let saving = false;
+  let pending: { reported: boolean } | undefined;
   let editing = false;
   function update(): void {
     button.classList.toggle('primary', editing && binding !== undefined);
     button.textContent = editing && binding ? t('Save', 'Opslaan') : binding ? t('Update draft', 'Draft bijwerken') : t('Save as draft', 'Opslaan als draft');
-    button.disabled = saving || (binding !== undefined && binding.state !== 'saved');
-    container.setAttribute('aria-busy', String(saving));
+    button.disabled = !!pending || (binding !== undefined && binding.state !== 'saved');
+    container.setAttribute('aria-busy', String(!!pending));
+  }
+  function setStatus(message: string, kind: 'message' | 'saved' | 'error' = 'message') {
+    status.title = kind === 'saved' ? message : '';
+    report(status, kind === 'saved' ? t('Saved', 'Opgeslagen') : message, kind === 'error');
+  }
+  function reportResult(message: string, kind?: 'message' | 'saved' | 'error') {
+    if (pending) pending.reported = true;
+    setStatus(message, kind);
   }
   button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (button.disabled) return;
-    saving = true;
+    const operation = { reported: false };
+    pending = operation;
     update();
-    report(status, t('Saving draft…', 'Draft opslaan…'));
+    setStatus(t('Saving draft…', 'Draft opslaan…'));
     void (async () => {
       try {
-        await onSave();
-        if (status.textContent === t('Saving draft…', 'Draft opslaan…')) report(status, t('Saved', 'Opgeslagen'));
+        await onSave(() => pending === operation);
       } catch (error) {
-        report(status, errorMessage(error), true);
+        if (pending === operation) reportResult(errorMessage(error), 'error');
       } finally {
-        saving = false;
-        update();
+        if (pending === operation) {
+          pending = undefined;
+          if (!operation.reported) setStatus('');
+          update();
+        }
       }
     })();
   });
@@ -400,17 +412,20 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
       bindDraft(button, draft);
       const blocked = draft !== undefined && draft.state !== 'saved';
       button.title = blocked ? t('Editing is disabled until the publication status has been checked.', 'Bewerken is uitgeschakeld totdat de publicatiestatus is gecontroleerd.') : t('Save locally as a draft · only visible to you', 'Lokaal opslaan als draft · alleen voor jou');
-      if (blocked) report(status, button.title);
+      if (blocked) reportResult(button.title);
       update();
     },
     setEditing(value) {
       editing = value;
       update();
     },
-    report(message, error = false) {
-      const saved = !error && /\b(saved|opgeslagen)\b/i.test(message);
-      status.title = saved ? message : '';
-      report(status, saved ? t('Saved', 'Opgeslagen') : message, error);
+    report: reportResult,
+    reset() {
+      if (pending) {
+        pending = undefined;
+        update();
+      }
+      setStatus('');
     },
   };
 }

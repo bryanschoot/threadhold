@@ -317,6 +317,16 @@ function newInlineAnchor(textarea: HTMLTextAreaElement, context: PrContext): Anc
   pendingNativeDiffs.delete(header);
   return anchor;
 }
+export function readNativeEditorActions(root: HTMLElement) {
+  const publish = root.querySelector<HTMLButtonElement>('button.bolt-button.primary:not([data-threadhold-action])') ?? root.querySelector<HTMLButtonElement>('button[id^="__bolt-comment-"]');
+  const actions = publish?.parentElement;
+  if (!publish || !actions) return;
+  const nativeButtons = [...actions.querySelectorAll<HTMLButtonElement>('button')].filter(button => !button.closest('.th-save'));
+  const secondaryPublish = nativeButtons.find(button => button !== publish && /reply\s*(?:&|and)\s*resolve/i.test(button.textContent ?? ''));
+  const cancel = nativeButtons.find(button => button !== publish && button !== secondaryPublish);
+  return { actions, publish, secondaryPublish, cancel };
+}
+
 export function discoverEditors(context: PrContext, threads: RemoteThread[], bindings: MonacoBinding[] = []): NativeEditor[] {
   identifyThreads(threads);
   const editors: NativeEditor[] = [];
@@ -324,15 +334,10 @@ export function discoverEditors(context: PrContext, threads: RemoteThread[], bin
   for (const textarea of document.querySelectorAll<HTMLTextAreaElement>('.repos-comment-editor-fit textarea:not([aria-hidden="true"]):not(.bolt-textfield-auto-adjust-hidden)')) {
     if (!textarea.isConnected || !textarea.getClientRects().length) continue;
     const root = textarea.closest<HTMLElement>('.repos-comment-editor-fit');
-    const publish = root?.querySelector<HTMLButtonElement>('button.bolt-button.primary:not([data-threadhold-action])') ?? root?.querySelector<HTMLButtonElement>('button[id^="__bolt-comment-"]');
-    const actions = publish?.parentElement;
+    const actions = root && readNativeEditorActions(root);
     const nativeThread = textarea.closest<HTMLElement>('.repos-discussion-thread');
     const id = threadId(textarea) ?? (nativeThread ? nativeThreadIds.get(nativeThread) : undefined);
-    if (!root || !publish || !actions) continue;
-    const nativeButtons = [...actions.querySelectorAll<HTMLButtonElement>('button')].filter(button => !button.closest('.th-save'));
-    const secondaryPublish = nativeButtons.find(button =>
-      button !== publish && /reply\s*(?:&|and)\s*resolve/i.test(button.textContent ?? ''));
-    const cancel = nativeButtons.find(button => button !== publish && button !== secondaryPublish);
+    if (!root || !actions) continue;
     const binding = bindings.find(item => item.textareaId === textarea.dataset.threadholdMonacoEditor);
     if (binding) monacoAnchors.set(textarea, binding.anchor);
     let anchor: Anchor | undefined;
@@ -343,7 +348,7 @@ export function discoverEditors(context: PrContext, threads: RemoteThread[], bin
     } else if (general?.input === textarea) {
       anchor = { kind: 'general', editorKey: 'general', pageUrl: `${context.scope.route.prUrl}?_a=overview`, sourceCommit: context.sourceCommit, targetCommit: context.targetCommit };
     } else if (id === undefined || id < 0) anchor = newInlineAnchor(textarea, context);
-    if (anchor) editors.push({ textarea, root, publish, actions, secondaryPublish, cancel, anchor });
+    if (anchor) editors.push({ textarea, root, ...actions, anchor });
   }
   return editors;
 }
