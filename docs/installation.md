@@ -64,7 +64,8 @@ The instructions below use English extension labels.
 - There is no draft tab or navigation index. Drafts appear alongside ordinary comments. An unmounted or outdated location gets a recovery card among the Overview comments.
 - After code changes, use the relinking action, open the intended new native editor and confirm attaching the draft there. There is no automatic line remapping.
 - **Publish drafts (n)** beside **Approve**, or beside the native **Publish** action on a draft PR, asks for confirmation and then publishes the saved drafts one at a time. This does not approve the PR, publish the draft PR itself or resolve threads.
-- If a publication result cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** makes GET requests only. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic retry.
+- Threadhold keeps the draft until a GET in the same PR confirms the exact thread and comment IDs from the POST response. Replies are checked in their original discussion. Matching text alone never confirms publication.
+- If publication cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** uses GET only and can verify IDs saved before a reload or interruption. If no valid receipt was saved, including for older pending drafts, the result stays unknown: inspect Azure DevOps manually. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic retry.
 
 ## Native views and compatibility
 
@@ -95,7 +96,7 @@ Wait for the resulting card, higher revision or removal, not a fixed sleep or me
 - No PAT, external backend, telemetry or browser sync. Context is read through GET requests using the existing browser session. Only the explicitly confirmed publication action sends comment POST requests to the same Azure DevOps origin.
 - Threadhold does not encrypt the database. Scripts on the Azure DevOps page can read draft text displayed there. “Local only” does not mean “invisible to page code.”
 - Multi-tab updates use revision checks. A conflict does not overwrite another revision; the native editor retains the text.
-- Interrupted publication becomes unknown when the service worker restarts. There is no automatic retry or exactly-once guarantee.
+- Interrupted publication becomes unknown when the service worker restarts. Any recorded publication IDs are retained for **Check publication**. There is no automatic retry or exactly-once guarantee.
 - Removing the extension or losing the browser profile can irreversibly erase drafts. There is no cloud backup.
 
 ## Verification boundaries

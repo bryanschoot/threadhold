@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { findPublication, type RemoteThread } from '../src/ado-context';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { findPublication, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import type { Draft } from '../src/contracts';
 
@@ -8,24 +8,53 @@ const draft: Draft = {
   id: 'draft-1', scope: { route, projectId: 'project-id', repositoryId: 'repo-id', userId: 'user-1' },
   anchor: { kind: 'general', editorKey: 'general', pageUrl: route.prUrl, sourceCommit: 'source', targetCommit: 'target' },
   body: 'Review dit', revision: 2, state: 'unknown', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-  submission: { body: 'Review dit', startedAt: '2026-01-01T00:00:00Z', knownCommentIds: ['10:1'] },
+  submission: { body: 'Review dit', startedAt: '2026-01-01T00:00:00Z', receipt: { threadId: 11, commentId: 1 } },
 };
 const user = { id: 'user-1', displayName: 'Reviewer' };
-const thread = (id: number, author = user): RemoteThread => ({ id, comments: [{ id: 1, content: 'Review dit', author, publishedDate: '2025-01-01T00:00:00Z' }] });
+const context: PrContext = { scope: draft.scope, user, sourceCommit: 'source', targetCommit: 'target', latestIteration: 1 };
+const thread = (id: number, author = user, commentId = 1): RemoteThread => ({ id, comments: [{ id: commentId, content: 'Review dit', author, publishedDate: '2025-01-01T00:00:00Z' }] });
+afterEach(() => vi.unstubAllGlobals());
 describe('publication reconciliation', () => {
-  it('never treats an existing same-body comment as the new publication', () => {
-    expect(findPublication(draft, [thread(10)], user)).toBeUndefined();
+  it('never treats an existing same-body comment as the new publication', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(thread(10))));
+    await expect(findPublication(draft, context)).resolves.toBeUndefined();
   });
-  it('finds one new exact comment without trusting the client clock', () => {
-    expect(findPublication(draft, [thread(10), thread(11)], user)).toEqual({ threadId: 11, commentId: 1 });
+  it('verifies the exact POST receipt with a scoped GET without trusting the client clock', async () => {
+    const send = vi.fn().mockResolvedValue(Response.json(thread(11)));
+    vi.stubGlobal('fetch', send);
+    await expect(findPublication(draft, context)).resolves.toEqual({ threadId: 11, commentId: 1 });
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      'https://dev.azure.com/company/project/_apis/git/repositories/repo-id/pullRequests/42/threads/11?api-version=7.1',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    );
   });
-  it('preserves a draft when multiple new comments are indistinguishable', () => {
-    expect(findPublication(draft, [thread(11), thread(12)], user)).toBeUndefined();
+  it('preserves a draft when only other same-body comments are present in the exact thread', async () => {
+    const other = thread(11, user, 2);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...other, comments: [...other.comments, ...thread(11, user, 3).comments] })));
+    await expect(findPublication(draft, context)).resolves.toBeUndefined();
   });
-  it('does not reconcile another reviewer or a different reply target', () => {
-    expect(findPublication(draft, [thread(11, { id: 'other', displayName: 'Other' })], user)).toBeUndefined();
-    const reply = { ...draft, anchor: { ...draft.anchor, kind: 'reply' as const, threadId: 13 } };
-    expect(findPublication(reply, [thread(11)], user)).toBeUndefined();
+  it('does not reconcile another reviewer or a different reply target', async () => {
+    const send = vi.fn().mockResolvedValue(Response.json(thread(11, { id: 'other', displayName: 'Other' })));
+    vi.stubGlobal('fetch', send);
+    await expect(findPublication(draft, context)).resolves.toBeUndefined();
+    const reply: Draft = { ...draft, anchor: { ...draft.anchor, kind: 'reply', threadId: 13 } };
+    await expect(findPublication(reply, context)).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('cannot reconcile a legacy journal without a receipt, even with a same-body reply', async () => {
+    const send = vi.fn().mockResolvedValue(Response.json(thread(11, user, 2)));
+    vi.stubGlobal('fetch', send);
+    const submission = { body: draft.body, startedAt: draft.createdAt, knownCommentIds: ['11:1'] };
+    const legacy: Draft = { ...draft, anchor: { ...draft.anchor, kind: 'reply', threadId: 11 }, submission };
+    await expect(findPublication(legacy, context)).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('does not read a receipt in a different pull request or account', async () => {
+    const send = vi.fn();
+    vi.stubGlobal('fetch', send);
+    await expect(findPublication(draft, { ...context, scope: { ...draft.scope, route: { ...route, pullRequestId: 43 } } })).resolves.toBeUndefined();
+    await expect(findPublication(draft, { ...context, scope: { ...draft.scope, userId: 'other' }, user: { ...user, id: 'other' } })).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
   });
 });
 describe('PR routing', () => {

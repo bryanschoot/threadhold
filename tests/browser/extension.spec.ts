@@ -84,7 +84,7 @@ let page: Page;
 let directory: string;
 let writes: number;
 let failPublication: boolean;
-let published: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
+let remoteThreads: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
 test.use({ locale: 'nl-NL' });
 
 test.beforeEach(async ({ locale }) => {
@@ -112,7 +112,9 @@ test.beforeEach(async ({ locale }) => {
   await popup.goto(`chrome-extension://${id}/popup.html`);
   await popup.getByRole('button', { name: english ? 'Grant access' : 'Toegang geven' }).click();
   await expect(popup.locator('#status')).toContainText(english ? 'Access is active' : 'Toegang actief');
-  writes = 0; published = []; failPublication = false;
+  writes = 0; failPublication = false;
+  const originalDiscussion = { id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] };
+  remoteThreads = [originalDiscussion];
   await context.route('https://dev.azure.com/**', async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -135,12 +137,27 @@ test.beforeEach(async ({ locale }) => {
       const payload = JSON.parse(request.postData()!);
       const body = payload.body ?? payload.content ?? payload.comments?.[0]?.content;
       const reply = pathname.endsWith('/threads/86671/comments');
-      published.push({ ...payload, id: reply ? 86671 : writes, comments: [{ id: reply ? writes + 1 : 1, content: body, publishedDate: new Date().toISOString(), author: { id: 'user-id', displayName: 'Reviewer' } }] });
-      await route.fulfill({ json: published.at(-1) }); return;
+      const comment = { id: reply ? originalDiscussion.comments.length + 1 : 1, content: body, publishedDate: new Date().toISOString(), author: { id: 'user-id', displayName: 'Reviewer' } };
+      if (reply) {
+        originalDiscussion.comments.push(comment);
+        await route.fulfill({ json: comment });
+      } else {
+        const thread = { ...payload, id: writes, comments: [comment] };
+        remoteThreads.push(thread);
+        await route.fulfill({ json: thread });
+      }
+      return;
     }
     if (pathname.includes('/_apis/')) {
+      const threadId = /\/threads\/(\d+)$/u.exec(pathname)?.[1];
+      if (threadId) {
+        const thread = remoteThreads.find(item => item.id === Number(threadId));
+        if (thread) await route.fulfill({ json: thread });
+        else await route.fulfill({ status: 404 });
+        return;
+      }
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
-        : pathname.endsWith('/threads') ? { value: [{ id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] }, ...published] }
+        : pathname.endsWith('/threads') ? { value: remoteThreads }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
         : pathname.endsWith('/pullRequests/42') ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
@@ -258,8 +275,8 @@ test('header publication requires consent and publishes general plus reply draft
   await publish.click();
   await expect(page.locator('[data-threadhold-card]')).toHaveCount(0);
   expect(writes).toBe(2);
-  expect(published.map(item => item.comments[0]?.content)).toEqual(expect.arrayContaining(['General batch fixture', 'Reply batch fixture']));
-  expect(published.find(item => item.id === 86671)?.comments[0]?.content).toBe('Reply batch fixture');
+  expect(remoteThreads.find(item => item.id !== 86671)?.comments[0]?.content).toBe('General batch fixture');
+  expect(remoteThreads.find(item => item.id === 86671)?.comments.map(comment => comment.content)).toEqual(['Original remote comment', 'Reply batch fixture']);
 });
 
 test('an uncertain header publication preserves its draft and cannot silently retry', async () => {

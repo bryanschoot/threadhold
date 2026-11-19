@@ -115,20 +115,16 @@ describe('durable native submission journal', () => {
   it('snapshots exact submission text and blocks concurrent mutation', async () => {
     const store = open();
     const saved = await draft(store, create());
-    const sending = await draft(store, { action: 'beginSubmit', scope, id: saved.id, ifRevision: saved.revision, body: 'Native editor text', knownCommentIds: ['12:7'] });
+    const sending = await draft(store, { action: 'beginSubmit', scope, id: saved.id, ifRevision: saved.revision, body: 'Native editor text' });
     expect(sending.state).toBe('sending');
     expect(sending.body).toBe('Native editor text');
     expect(sending.submission?.body).toBe('Native editor text');
-    expect(sending.submission?.knownCommentIds).toEqual(['12:7']);
-    const baseline = sending.submission!.knownCommentIds;
-    baseline.push('99:99');
-    expect((await draft(store, { action: 'get', scope, id: saved.id })).submission?.knownCommentIds).toEqual(['12:7']);
     expect(sending.revision).toBe(2);
     expect((await draft(store, { action: 'get', scope, id: saved.id })).state).toBe('sending');
     for (const request of [
       { action: 'update', scope, id: saved.id, ifRevision: 2, body: 'Unsafe edit' },
       { action: 'delete', scope, id: saved.id, ifRevision: 2 },
-      { action: 'beginSubmit', scope, id: saved.id, ifRevision: 2, body: 'Duplicate post', knownCommentIds: [] },
+      { action: 'beginSubmit', scope, id: saved.id, ifRevision: 2, body: 'Duplicate post' },
     ] as DraftRequest[]) await expect(store.execute(request)).rejects.toMatchObject({ code: 'INVALID_STATE' });
     const restored = await draft(store, { action: 'finishSubmit', scope, id: saved.id, ifRevision: 2, outcome: 'failed' });
     expect(restored).toMatchObject({ state: 'saved', body: 'Native editor text', revision: 3 });
@@ -139,7 +135,7 @@ describe('durable native submission journal', () => {
     const name = crypto.randomUUID();
     const original = open(name);
     const saved = await draft(original, create());
-    await original.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: 'Possibly published', knownCommentIds: ['12:7'] });
+    await original.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: 'Possibly published' });
     await original.close();
     const restarted = open(name);
     await restarted.recoverSubmissions();
@@ -149,39 +145,64 @@ describe('durable native submission journal', () => {
     await restarted.recoverSubmissions();
     expect(await draft(restarted, { action: 'get', scope, id: saved.id })).toEqual(unknown);
     const failed = await draft(restarted, { action: 'finishSubmit', scope, id: saved.id, ifRevision: 3, outcome: 'failed' });
-    await restarted.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: failed.revision, body: 'Explicitly checked and retried', knownCommentIds: ['12:7'] });
+    await restarted.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: failed.revision, body: 'Explicitly checked and retried' });
     await restarted.recoverSubmissions();
     expect((await draft(restarted, { action: 'get', scope, id: saved.id })).state).toBe('sending');
   });
 
-  it('preserves unknown results and only removes drafts after confirmed positive remote IDs', async () => {
+  it('preserves an unknown draft and only removes it for IDs matching the stored receipt', async () => {
     const store = open();
     const request = create();
     const saved = await draft(store, request);
-    const sending = await draft(store, { action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: saved.body, knownCommentIds: [] });
-    const unknown = await draft(store, { action: 'finishSubmit', scope, id: saved.id, ifRevision: sending.revision, outcome: 'unknown' });
+    const sending = await draft(store, { action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: saved.body });
+    const receipt = { threadId: 100, commentId: 7 };
+    const recorded = await draft(store, { action: 'recordSubmitReceipt', scope, id: saved.id, ifRevision: sending.revision, receipt });
+    const unknown = await draft(store, { action: 'finishSubmit', scope, id: saved.id, ifRevision: recorded.revision, outcome: 'unknown' });
     expect(unknown.state).toBe('unknown');
-    expect(unknown.submission).toEqual(sending.submission);
-    await expect(store.execute({ action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'published', remoteThreadId: 0, remoteCommentId: 7 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
-    expect(await store.execute({ action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'published', remoteThreadId: 100, remoteCommentId: 7 })).toEqual({ deleted: true });
+    const finish = { action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'published' } as const;
+    await expect(store.execute({ ...finish, remoteThreadId: 0, remoteCommentId: 7 })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    await expect(store.execute({ ...finish, remoteThreadId: 100, remoteCommentId: 8 })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+    expect(await store.execute({ ...finish, remoteThreadId: 100, remoteCommentId: 7 })).toEqual({ deleted: true });
     expect(await store.execute({ action: 'list', scope })).toEqual({ drafts: [] });
     await expect(store.execute(request)).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
-  it('rejects missing, malformed and duplicate submission baselines without changing the saved draft', async () => {
+  it('rejects missing and malformed receipts without enabling automatic draft removal', async () => {
     const store = open();
     const saved = await draft(store, create());
-    for (const knownCommentIds of [undefined, ['12:7', '12:7'], ['not-an-id'], ['0:1'], ['1:9007199254740992']]) {
-      const request = { action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: saved.body, knownCommentIds };
+    const sending = await draft(store, { action: 'beginSubmit', scope, id: saved.id, ifRevision: saved.revision, body: saved.body });
+    for (const receipt of [undefined, { threadId: 12 }, { threadId: '12', commentId: 7 }, { threadId: 12, commentId: 9007199254740992 }]) {
+      const request = { action: 'recordSubmitReceipt', scope, id: saved.id, ifRevision: sending.revision, receipt };
       await expect(store.execute(request as DraftRequest)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     }
-    expect(await draft(store, { action: 'get', scope, id: saved.id })).toEqual(saved);
+    const unknown = await draft(store, { action: 'finishSubmit', scope, id: saved.id, ifRevision: sending.revision, outcome: 'unknown' });
+    await expect(store.execute({ action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'published', remoteThreadId: 12, remoteCommentId: 7 })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+    expect(await draft(store, { action: 'get', scope, id: saved.id })).toEqual(unknown);
+  });
+
+  it('recovers the original reply receipt after interruption before GET verification', async () => {
+    const name = crypto.randomUUID();
+    const original = open(name);
+    const replyAnchor: Anchor = { ...anchor, kind: 'reply', editorKey: 'thread-23', threadId: 23 };
+    const saved = await draft(original, { action: 'create', scope, anchor: replyAnchor, body: 'Reply in thread 23', requestId: 'original-reply' });
+    const sending = await draft(original, { action: 'beginSubmit', scope, id: saved.id, ifRevision: saved.revision, body: saved.body });
+    const record = { action: 'recordSubmitReceipt', scope, id: saved.id, ifRevision: sending.revision } as const;
+    const receipt = { threadId: 23, commentId: 4 };
+    await expect(original.execute({ ...record, receipt: { ...receipt, threadId: 24 } })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+    await original.execute({ ...record, receipt });
+    await original.close();
+
+    const restarted = open(name);
+    await restarted.recoverSubmissions();
+    const unknown = await draft(restarted, { action: 'get', scope, id: saved.id });
+    expect(unknown).toMatchObject({ state: 'unknown', anchor: replyAnchor, submission: { receipt } });
+    expect(await restarted.execute({ action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'published', remoteThreadId: 23, remoteCommentId: 4 })).toEqual({ deleted: true });
   });
 
   it('allows explicit CAS deletion of an uncertain local draft without publishing', async () => {
     const store = open();
     const saved = await draft(store, create());
-    await store.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: saved.body, knownCommentIds: [] });
+    await store.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: 1, body: saved.body });
     const unknown = await draft(store, { action: 'finishSubmit', scope, id: saved.id, ifRevision: 2, outcome: 'unknown' });
     await expect(store.execute({ action: 'delete', scope, id: saved.id, ifRevision: 2 })).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(await store.execute({ action: 'delete', scope, id: saved.id, ifRevision: unknown.revision })).toEqual({ deleted: true });

@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type PrRoute, type Scope } from './contracts';
+import { isPositiveId, scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type PrRoute, type Scope } from './contracts';
 import { parsePrRoute } from './routes';
 import { t } from './i18n';
 
@@ -23,7 +23,7 @@ function text(value: unknown, name: string, max = 4096): asserts value is string
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) invalid(`${name} must be nonempty bounded text without control characters.`);
 }
 function positive(value: unknown, name: string): asserts value is number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) invalid(`${name} must be a positive safe integer.`);
+  if (!isPositiveId(value)) invalid(`${name} must be a positive safe integer.`);
 }
 function body(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.includes('\0') || value.length > MAX_BODY_BYTES || encoder.encode(value).byteLength > MAX_BODY_BYTES) invalid(t('Body must contain text and be at most 1 MiB in UTF-8.', 'De inhoud moet tekst bevatten en mag maximaal 1 MiB groot zijn in UTF-8.'));
@@ -91,18 +91,17 @@ export function validateDraftRequest(value: unknown): asserts value is DraftRequ
     case 'create': fields = ['anchor', 'body', 'requestId']; break;
     case 'update': fields = ['id', 'ifRevision', 'body', 'anchor']; break;
     case 'delete': fields = ['id', 'ifRevision']; break;
-    case 'beginSubmit': fields = ['id', 'ifRevision', 'body', 'knownCommentIds']; break;
+    case 'beginSubmit': fields = ['id', 'ifRevision', 'body']; break;
+    case 'recordSubmitReceipt': fields = ['id', 'ifRevision', 'receipt']; break;
     case 'finishSubmit': fields = ['id', 'ifRevision', 'outcome', 'remoteThreadId', 'remoteCommentId']; break;
     default: invalid('Unsupported draft action.');
   }
   keys(value, ['action', 'scope', ...fields], 'Request');
-  if (action === 'beginSubmit') {
-    if (!Array.isArray(value.knownCommentIds) || value.knownCommentIds.length > 100000) invalid('Submission baseline must be an array of at most 100000 comment IDs.');
-    const seen = new Set<string>();
-    for (const id of value.knownCommentIds) {
-      if (typeof id !== 'string' || id.length > 33 || !/^[1-9]\d*:[1-9]\d*$/u.test(id) || id.split(':').some(part => !Number.isSafeInteger(Number(part))) || seen.has(id)) invalid('Submission baseline requires unique positive thread:comment IDs.');
-      seen.add(id);
-    }
+  if (action === 'recordSubmitReceipt') {
+    object(value.receipt, 'Publication receipt');
+    keys(value.receipt, ['threadId', 'commentId'], 'Publication receipt');
+    positive(value.receipt.threadId, 'Receipt thread ID');
+    positive(value.receipt.commentId, 'Receipt comment ID');
   }
   validateScope(value.scope);
   if (fields.includes('id')) text(value.id, 'Draft ID', 256);
@@ -223,9 +222,23 @@ export class DraftStore {
           if (!stored || stored.scopeKey !== key) throw new DraftStoreError('NOT_FOUND', t('Draft was not found in this account and pull request.', 'De draft is niet gevonden voor dit account en deze pull request.'));
           const draft = stored.draft;
           if (request.ifRevision !== draft.revision) throw new DraftStoreError('CONFLICT', t('Draft changed in another tab. Reload it before retrying.', 'De draft is gewijzigd in een ander tabblad. Laad de draft opnieuw voordat je het opnieuw probeert.'));
-          if (request.action === 'finishSubmit') {
+          if (request.action === 'recordSubmitReceipt') {
+            if (draft.state !== 'sending' || !draft.submission || draft.submission.receipt ||
+                (draft.anchor.kind === 'reply' && draft.anchor.threadId !== request.receipt.threadId)) {
+              throw new DraftStoreError('INVALID_STATE', t('Publication receipt does not match a pending submission.', 'De ontvangstbevestiging komt niet overeen met een openstaande publicatie.'));
+            }
+            draft.submission.receipt = request.receipt;
+            draft.revision++;
+            draft.updatedAt = new Date().toISOString();
+            await drafts.put(stored);
+            result = { draft };
+          } else if (request.action === 'finishSubmit') {
             if (draft.state !== 'sending' && draft.state !== 'unknown') throw new DraftStoreError('INVALID_STATE', t('Draft has no pending submission to reconcile.', 'De draft heeft geen openstaande publicatie om te controleren.'));
             if (request.outcome === 'published') {
+              const receipt = draft.submission?.receipt;
+              if (!receipt || receipt.threadId !== request.remoteThreadId || receipt.commentId !== request.remoteCommentId) {
+                throw new DraftStoreError('INVALID_STATE', t('Verified publication IDs do not match the stored receipt.', 'De geverifieerde publicatie-ID’s komen niet overeen met de opgeslagen ontvangstbevestiging.'));
+              }
               await drafts.delete(draft.id);
               result = { deleted: true };
             } else {
@@ -247,7 +260,7 @@ export class DraftStore {
                 if (request.anchor) draft.anchor = request.anchor;
               } else {
                 draft.state = 'sending';
-                draft.submission = { body: request.body, startedAt: new Date().toISOString(), knownCommentIds: request.knownCommentIds };
+                draft.submission = { body: request.body, startedAt: new Date().toISOString() };
               }
               draft.revision++;
               draft.updatedAt = new Date().toISOString();

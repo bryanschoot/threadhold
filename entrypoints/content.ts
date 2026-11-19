@@ -1,6 +1,6 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { browser } from 'wxt/browser';
-import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse } from '../src/contracts';
+import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PublicationReceipt } from '../src/contracts';
 import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import { discoverEditors, findDraftLocation, installNativeDiffCapture, openDraftEditor, readEditor, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
@@ -134,9 +134,8 @@ export default defineContentScript({
       },
       async check(draft) {
         const fresh = await current();
-        threads = await readThreads(fresh);
-        const found = findPublication(draft, threads, fresh.user);
-        if (!found) throw new Error(t('No unique new comment with this exact author, content, and location was confirmed. The draft is retained; check for duplicates before publishing again.', 'Geen unieke nieuwe comment met exact deze auteur, inhoud en locatie bevestigd. Draft blijft behouden; publiceer niet opnieuw zonder controle op duplicaten.'));
+        const found = await findPublication(draft, fresh);
+        if (!found) throw new Error(t('The exact comment from the publication receipt could not be confirmed. The draft is retained; check for duplicates before publishing again.', 'De exacte comment uit de ontvangstbevestiging kon niet worden bevestigd. Draft blijft behouden; publiceer niet opnieuw zonder controle op duplicaten.'));
         await request({ action: 'finishSubmit', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, outcome: 'published', remoteThreadId: found.threadId, remoteCommentId: found.commentId });
         await refresh();
         show(t('Publication confirmed; local draft removed.', 'Publicatie bevestigd; lokale draft opgeruimd.'));
@@ -217,23 +216,26 @@ export default defineContentScript({
           const active = await current();
           threads = await readThreads(active);
           if (isStale(draft, active, threads)) throw new Error(t('The original location has changed. Remaining drafts have been retained.', 'De oorspronkelijke locatie is gewijzigd. Resterende drafts zijn behouden.'));
-          const result = await request({ action: 'beginSubmit', scope: active.scope, id: draft.id, ifRevision: draft.revision, body: draft.body, knownCommentIds: threads.flatMap(thread => thread.comments.map(comment => `${thread.id}:${comment.id}`)) });
+          const result = await request({ action: 'beginSubmit', scope: active.scope, id: draft.id, ifRevision: draft.revision, body: draft.body });
           if (!('draft' in result)) throw new Error(t('No durable publication journal; nothing has been published.', 'Geen duurzaam publicatiejournal; er is niet gepubliceerd.'));
-          const journal = result.draft;
+          let journal = result.draft;
           try {
-            await postDraft(journal, active, threads);
+            const receipt = await postDraft(journal, active, threads);
+            // Commit the POST receipt before any GET so a later check can reconcile the same IDs.
+            const recorded = await request({ action: 'recordSubmitReceipt', scope: active.scope, id: journal.id, ifRevision: journal.revision, receipt });
+            if (!('draft' in recorded)) throw new Error(t('Could not save the publication receipt.', 'De ontvangstbevestiging kon niet worden opgeslagen.'));
+            journal = recorded.draft;
             const deadline = Date.now() + 12_000;
-            let found: { threadId: number; commentId: number } | undefined;
+            let found: PublicationReceipt | undefined;
             do {
-              threads = await readThreads(active);
-              found = findPublication(journal, threads, active.user);
+              found = await findPublication(journal, active);
               if (found || disposed) break;
               const wait = Promise.withResolvers<void>();
               ctx.setTimeout(wait.resolve, 700);
               await wait.promise;
             } while (Date.now() < deadline);
-            await request({ action: 'finishSubmit', scope: active.scope, id: journal.id, ifRevision: journal.revision, outcome: found ? 'published' : 'unknown', remoteThreadId: found?.threadId, remoteCommentId: found?.commentId });
-            if (!found) throw new Error(t('Publication could not be uniquely confirmed. Check the thread; remaining drafts have not been posted.', 'Publicatie niet uniek bevestigd. Controleer de discussie; overige drafts zijn niet geplaatst.'));
+            if (!found) throw new Error(t('The exact published comment could not be confirmed. Check publication; remaining drafts have not been posted.', 'De exacte geplaatste comment kon niet worden bevestigd. Controleer de publicatie; overige drafts zijn niet geplaatst.'));
+            await request({ action: 'finishSubmit', scope: active.scope, id: journal.id, ifRevision: journal.revision, outcome: 'published', remoteThreadId: found.threadId, remoteCommentId: found.commentId });
             completed++;
           } catch (error) {
             try { await request({ action: 'finishSubmit', scope: active.scope, id: journal.id, ifRevision: journal.revision, outcome: 'unknown' }); }
