@@ -374,18 +374,19 @@ export interface SaveControl {
   button: HTMLButtonElement;
   setBinding(draft?: Draft): void;
   setEditing(editing: boolean): void;
-  resetSave(): void;
-  setReattach(action?: () => Promise<void>): void;
-  report(message: string, error?: boolean): void;
+  reset(): void;
+  setReattach(action?: SaveAction): void;
+  report(message: string, kind?: 'message' | 'saved'): void;
 }
-export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<void>): SaveControl {
+type SaveAction = (isCurrent: () => boolean) => Promise<void>;
+export function createSaveControl(onSave: SaveAction): SaveControl {
   const container = element('div', 'th-save');
   const button = actionButton(t('Save as draft', 'Opslaan als draft'), 'save');
   const status = liveStatus();
   container.append(button, status);
   let binding: Draft | undefined;
-  let reattach: (() => Promise<void>) | undefined;
-  let pending: { action: typeof onSave } | undefined;
+  let reattach: SaveAction | undefined;
+  let pending: { action: SaveAction; reported: boolean } | undefined;
   let editing = false;
   function update(): void {
     const blocked = binding !== undefined && binding.state !== 'saved';
@@ -395,24 +396,31 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
     button.disabled = !!pending || blocked;
     container.setAttribute('aria-busy', String(!!pending));
   }
+  function setStatus(message: string, kind: 'message' | 'saved' | 'error' = 'message') {
+    status.title = kind === 'saved' ? message : '';
+    report(status, kind === 'saved' ? t('Saved', 'Opgeslagen') : message, kind === 'error');
+  }
+  function reportResult(message: string, kind?: 'message' | 'saved' | 'error') {
+    if (pending) pending.reported = true;
+    setStatus(message, kind);
+  }
   button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (button.disabled) return;
-    const operation = { action: reattach ?? onSave };
+    const operation = { action: reattach ?? onSave, reported: false };
     pending = operation;
     update();
-    const waiting = reattach ? t('Checking the new location…', 'Nieuwe locatie wordt gecontroleerd…') : t('Saving draft…', 'Draft opslaan…');
-    report(status, waiting);
+    setStatus(reattach ? t('Checking the new location…', 'Nieuwe locatie wordt gecontroleerd…') : t('Saving draft…', 'Draft opslaan…'));
     void (async () => {
       try {
-        await operation.action();
-        if (pending === operation && status.textContent === waiting) report(status, '');
+        await operation.action(() => pending === operation);
       } catch (error) {
-        if (pending === operation) report(status, errorMessage(error), true);
+        if (pending === operation) reportResult(errorMessage(error), 'error');
       } finally {
         if (pending === operation) {
           pending = undefined;
+          if (!operation.reported) setStatus('');
           update();
         }
       }
@@ -427,34 +435,29 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
       bindDraft(container, draft);
       bindDraft(button, draft);
       update();
-      if (draft && draft.state !== 'saved') report(status, button.title);
+      if (draft && draft.state !== 'saved') reportResult(button.title);
     },
     setEditing(value) {
       editing = value;
       update();
     },
-    resetSave() {
-      if (pending?.action === onSave) pending = undefined;
-      if (!pending) {
-        status.title = '';
-        report(status, '');
+    reset() {
+      if (pending) {
+        pending = undefined;
+        update();
       }
-      update();
+      setStatus('');
     },
     setReattach(action) {
       if (action === reattach) return;
       if (reattach) {
         if (pending?.action === reattach) pending = undefined;
-        if (!pending) report(status, '');
+        if (!pending) setStatus('');
       }
       reattach = action;
       update();
     },
-    report(message, error = false) {
-      const saved = !error && /\b(saved|opgeslagen)\b/i.test(message);
-      status.title = saved ? message : '';
-      report(status, saved ? t('Saved', 'Opgeslagen') : message, error);
-    },
+    report: reportResult,
   };
 }
 

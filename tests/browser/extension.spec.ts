@@ -367,6 +367,51 @@ test.describe('PR context lifecycle', () => {
   });
 });
 
+async function duringDraftWrite(startSave: () => Promise<void>, whilePending: () => Promise<void>) {
+  const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+  await worker.evaluate(async () => {
+    const open = indexedDB.open('threadhold');
+    const { promise: opened, resolve, reject } = Promise.withResolvers<IDBDatabase>();
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+    const database = await opened;
+    const lock = database.transaction('drafts', 'readwrite');
+    const store = lock.objectStore('drafts');
+    let released = false;
+    // Keep an earlier overlapping transaction active so the real save queues behind it.
+    function holdLock() {
+      if (!released) store.get('__fixture_lock__').onsuccess = holdLock;
+    }
+    holdLock();
+    lock.oncomplete = () => database.close();
+
+    const transaction = IDBDatabase.prototype.transaction;
+    const { promise: queued, resolve: signalQueued } = Promise.withResolvers<void>();
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      const result = transaction.call(this, names, mode, options);
+      if (this.name === database.name && mode === 'readwrite' && result.objectStoreNames.contains('requests')) signalQueued();
+      return result;
+    };
+    Reflect.set(globalThis, '__threadholdWriteGate', {
+      queued,
+      release() {
+        IDBDatabase.prototype.transaction = transaction;
+        released = true;
+      },
+    });
+  });
+  try {
+    await startSave();
+    await worker.evaluate(() => Reflect.get(globalThis, '__threadholdWriteGate').queued);
+    await whilePending();
+  } finally {
+    await worker.evaluate(() => {
+      Reflect.get(globalThis, '__threadholdWriteGate').release();
+      Reflect.deleteProperty(globalThis, '__threadholdWriteGate');
+    });
+  }
+}
+
 test('browser-agent CRUD survives reload and never publishes', async () => {
   const text = 'Lokale review: café 🧵\n**Markdown** @<user-id> <img src=x onerror=alert(1)>';
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill(text);
