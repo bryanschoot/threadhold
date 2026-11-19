@@ -52,6 +52,8 @@ The extension follows the browser's `navigator.language`. English is the default
 | Save as draft | Opslaan als draft |
 | Edit / Save / Cancel | Bewerken / Opslaan / Annuleren |
 | Delete draft | Draft verwijderen |
+| Retry | Opnieuw proberen |
+| Reattach / Reattach draft here / Cancel reattach | Opnieuw koppelen / Draft hier koppelen / Koppelen annuleren |
 | Publish drafts (n) | Drafts plaatsen (n) |
 | Draft help | Drafthulp |
 
@@ -62,7 +64,7 @@ The instructions below use English extension labels.
 - **Cancel** discards only the unsaved edit. The last saved draft remains.
 - The **Delete draft** trash icon asks for confirmation and removes only the local draft.
 - There is no draft tab or navigation index. Drafts appear alongside ordinary comments. An unmounted or outdated location gets a recovery card among the Overview comments.
-- After code changes, use the relinking action, open the intended new native editor and confirm attaching the draft there. There is no automatic line remapping.
+- If a draft location is outdated, choose **Reattach** on its card, open the intended native comment editor and choose **Reattach draft here**. There is no automatic line remapping. **Cancel reattach** restores the normal draft buttons and leaves the saved draft and editor text unchanged. Switching PRs also clears reattach mode.
 - **Publish drafts (n)** beside **Approve**, or beside the native **Publish** action on a draft PR, asks for confirmation and then publishes the saved drafts one at a time. This does not approve the PR, publish the draft PR itself or resolve threads.
 - If a publication result cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** makes GET requests only. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic retry.
 
@@ -71,6 +73,8 @@ The instructions below use English extension labels.
 General comments, replies and inline drafts use the existing Azure DevOps editor. Single- and multi-line anchors preserve start and end lines and columns, in inline view and on both sides of side-by-side view. In **All Changes**, the extension captures the native side/line selection before focus and DOM replacement; temporary negative thread IDs are not limited to `-1`. The Monaco single-file editor uses the public editor API for selection, viewzone spacing and bounded interactive overlays above the code layer, not hidden React state. An anonymous original model is linked only through its unique modified partner within the same diff, with the repository and source commit checked.
 
 Azure DevOps does not provide a stable contract for this DOM extension. Unknown or ambiguous locations do not receive a guessed draft binding. A UI update may require adapter changes. Ordinary native publication without a draft binding remains unchanged.
+
+If Threadhold cannot load the PR integration, choose **Retry** in its message on that PR. This does not reload the page or change native editor text. Threadhold does not retry automatically.
 
 ## Browser agents
 

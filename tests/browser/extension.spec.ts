@@ -142,7 +142,7 @@ test.beforeEach(async ({ locale }) => {
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
         : pathname.endsWith('/threads') ? { value: [{ id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] }, ...published] }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
-        : pathname.endsWith('/pullRequests/42') ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
+        : /\/pullRequests\/\d+$/i.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
       await route.fulfill({ json }); return;
     }
@@ -153,6 +153,156 @@ test.beforeEach(async ({ locale }) => {
   await expect(page.getByRole('button', { name: english ? 'Save as draft' : 'Opslaan als draft', exact: true })).toBeVisible();
 });
 test.afterEach(async () => { await context?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
+
+test.describe('PR context lifecycle', () => {
+  const replyBody = 'Draft for the old reply location';
+  const threadGet = (pr: number) => new RegExp(`/pullRequests/${pr}/threads\\?`);
+  const editor = () => page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  const save = () => page.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const retry = () => page.getByRole('button', { name: 'Opnieuw proberen', exact: true });
+  const cancelReattach = () => page.getByRole('button', { name: 'Koppelen annuleren', exact: true });
+
+  async function openPr(pr: number) {
+    await page.evaluate(path => history.pushState(null, '', path), url.replace(/\/42$/, `/${pr}`));
+  }
+
+  async function holdThreads(pr: number, failure?: number) {
+    const arrived = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    await page.route(threadGet(pr), async route => {
+      arrived.resolve();
+      await release.promise;
+      if (failure) await route.fulfill({ status: failure, json: {} });
+      else await route.fallback();
+    }, { times: 1 });
+    return {
+      arrived: arrived.promise,
+      release: release.resolve,
+      async finish() {
+        const response = page.waitForResponse(threadGet(pr));
+        release.resolve();
+        expect(await (await response).finished()).toBeNull();
+      },
+    };
+  }
+
+  async function prepareStaleReply() {
+    const thread = page.locator('[data-existing-thread]');
+    await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+    await thread.locator('textarea').fill(replyBody);
+    await thread.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+    const card = page.locator('[data-threadhold-card]');
+    await expect(card.locator('.th-body')).toHaveText(replyBody);
+    const id = await card.getAttribute('data-threadhold-draft-id');
+    await page.route(threadGet(42), route => route.fulfill({ json: { value: [] } }));
+    await page.reload();
+    const stored = page.locator(`[data-threadhold-card][data-threadhold-draft-id="${id}"]`);
+    await stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true }).click();
+    return stored;
+  }
+
+  test('Retry recovers from a failed GET on the same page', async () => {
+    let attempts = 0;
+    await page.route(threadGet(43), route => ++attempts === 1
+      ? route.fulfill({ status: 503, json: {} })
+      : route.fallback());
+    await editor().fill('Native text already typed');
+    await openPr(43);
+    await expect(page.getByRole('alert')).toContainText('HTTP 503');
+    await expect(save()).toHaveCount(0);
+    await page.evaluate(() => {
+      history.replaceState(null, '', '?same-pr');
+      window.dispatchEvent(new Event('focus'));
+    });
+    await expect(retry()).toBeEnabled();
+    expect(attempts).toBe(1);
+
+    await retry().press('Enter');
+    await expect(save()).toBeVisible();
+    await expect(retry()).toHaveCount(0);
+    await expect(editor()).toHaveValue('Native text already typed');
+    expect(attempts).toBe(2);
+    await save().click();
+    await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Native text already typed');
+    expect(writes).toBe(0);
+  });
+
+  test('a late Retry failure does not change the next PR', async () => {
+    await page.route(threadGet(43), route => route.fulfill({ status: 503, json: {} }), { times: 1 });
+    await openPr(43);
+    await expect(retry()).toBeVisible();
+    const pending = await holdThreads(43, 502);
+    try {
+      await retry().click();
+      await pending.arrived;
+      await expect(retry()).toBeDisabled();
+      await openPr(44);
+      await expect(save()).toBeVisible();
+      await pending.finish();
+      await editor().fill('Draft in PR 44');
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Draft in PR 44');
+      await expect(retry()).toHaveCount(0);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('Cancel reattach restores Save while confirmation is pending', async () => {
+    const stored = await prepareStaleReply();
+    await editor().fill(replyBody);
+    const pending = await holdThreads(42);
+    try {
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await pending.arrived;
+      await cancelReattach().press('Enter');
+      await expect(save()).toBeEnabled();
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(editor()).toHaveValue(replyBody);
+      await pending.finish();
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText([replyBody, replyBody]);
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '1');
+      await expect(stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+
+      await stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true }).click();
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '2');
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(editor()).toHaveValue(replyBody);
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('switching PRs during pending reattach leaves both PRs independent', async () => {
+    const stored = await prepareStaleReply();
+    const pending = await holdThreads(42);
+    try {
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await pending.arrived;
+      await openPr(43);
+      await expect(save()).toBeVisible();
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(stored).toHaveCount(0);
+      await pending.finish();
+      await expect(editor()).toHaveValue('');
+      await editor().fill('Independent draft in PR 43');
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Independent draft in PR 43');
+
+      await openPr(42);
+      await expect(stored.locator('.th-body')).toHaveText(replyBody);
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '1');
+      await expect(stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+});
 
 test('browser-agent CRUD survives reload and never publishes', async () => {
   const text = 'Lokale review: café 🧵\n**Markdown** @<user-id> <img src=x onerror=alert(1)>';
