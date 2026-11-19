@@ -95,3 +95,20 @@ Targeted tests cover storage isolation, revision conflicts, context/anchor bindi
 The real Azure DevOps interface also requires visual and local CRUD verification: a fixture does not prove lasting DOM compatibility. Real publication checks require separate permission; without them, no claim of live publication is made.
 
 Deliver source code, an unpacked build and installation/privacy instructions. A ZIP is not a signed store installation. Publisher account steps and store approval do not yet constitute a published listing.
+
+### Development checks
+
+Use `npm run dev` for development and see [Build from source](installation.md#build-from-source) for the build, typecheck and unit-test commands.
+
+The read-only **PR browser tests** workflow runs the **Browser tests** check on every pull request, including docs-only changes. To reproduce it locally on Ubuntu with Node.js 22 (22.12 or newer):
+
+```sh
+npm ci
+npm run build -- --browser chrome --mv3
+npx playwright install --with-deps --no-shell chromium
+npm run test:browser
+```
+
+On Windows, omit `--with-deps`. The suite loads `.output/chrome-mv3` in Playwright's bundled Chromium with a persistent headless context; it does not use a system Chrome install.
+
+See [Releasing](installation.md#releasing) for the tag-triggered packaging workflow.
