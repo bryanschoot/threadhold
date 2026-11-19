@@ -60,5 +60,9 @@ export function isPositiveId(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 export function scopeKey(scope: Scope): string {
-  return JSON.stringify([scope.route.origin.toLowerCase(), scope.route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), scope.route.pullRequestId, scope.userId.toLowerCase()]);
+  const { route } = scope;
+  const key = [route.origin.toLowerCase(), route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), route.pullRequestId, scope.userId.toLowerCase()];
+  // Keep the existing keys for modern and collection-less URLs.
+  if (route.origin.endsWith('.visualstudio.com') && route.organizationUrl !== route.origin) key.push(route.organizationUrl.toLowerCase());
+  return JSON.stringify(key);
 }

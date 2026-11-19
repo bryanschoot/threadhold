@@ -1,16 +1,17 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { browser } from 'wxt/browser';
-import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PublicationReceipt } from '../src/contracts';
+import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PrRoute, type PublicationReceipt } from '../src/contracts';
 import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import { discoverEditors, findDraftLocation, installNativeDiffCapture, openDraftEditor, readEditor, readNativeEditorActions, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
-import { createDraftCard, createDraftHelp, createPublishControl, createSaveControl, type DraftUiActions, type SaveControl } from '../src/ui';
+import { createActionNotice, createDraftCard, createDraftHelp, createPublishControl, createSaveControl, type ActionNotice, type DraftUiActions, type SaveControl } from '../src/ui';
 import { postDraft } from '../src/ado-publish';
 import { readMonacoBindings, syncMonacoDraftSlots, type MonacoBinding } from '../src/monaco-client';
 import { t } from '../src/i18n';
 import '../src/content.css';
 
 type EditorState = { editor: NativeEditor; controls: SaveControl; draft?: Draft; requestId?: string; editing: boolean; dispose(): void };
+type Reattach = { draft: Draft; scope: string; generation: number; notice: ActionNotice; committing: boolean };
 
 export default defineContentScript({
   matches: ['https://dev.azure.com/*', 'https://*.visualstudio.com/*'],
@@ -22,31 +23,48 @@ export default defineContentScript({
     let drafts: Draft[] = [];
     let routeKey = '';
     let generation = 0;
-    let refreshing = false;
+    let refreshing: number | undefined;
     let publishControl: HTMLButtonElement | undefined;
     let draftHelp: ReturnType<typeof createDraftHelp> | undefined;
     let batchPublishing = false;
     let notice: HTMLElement | undefined;
+    let routeNotice: ActionNotice | undefined;
     const editors = new Map<HTMLTextAreaElement, EditorState>();
     const cards = new Map<string, HTMLElement>();
     let disposed = false;
-    let reanchorDraft: Draft | undefined;
+    let reanchor: Reattach | undefined;
     let monacoBindings: MonacoBinding[] = [];
     let monacoSignature = '';
     let monacoPending = false;
+    function onRoute(version: number): boolean {
+      return !disposed && version === generation && routeKey === location.origin + location.pathname;
+    }
+    function onScope(version: number, scope: string): boolean {
+      return onRoute(version) && !!context && scopeKey(context.scope) === scope;
+    }
+    function mountActionNotices() {
+      if (!routeNotice && !reanchor) return;
+      const page = document.querySelector('.repos-pr-details-page');
+      const parent = page?.querySelector('.page-content') ?? page;
+      if (!parent) return;
+      if (routeNotice && routeNotice.element.parentElement !== parent) parent.prepend(routeNotice.element);
+      if (reanchor && reanchor.notice.element.parentElement !== parent) parent.prepend(reanchor.notice.element);
+    }
     function show(message: string, error = false) {
       const page = document.querySelector('.repos-pr-details-page');
       if (!page) return;
       if (!notice?.isConnected) {
         notice = document.createElement('p'); notice.className = 'th-save';
         notice.dataset.threadholdStatus = '';
+        notice.tabIndex = -1;
         notice.setAttribute('aria-atomic', 'true');
-        page.querySelector('.page-content')?.prepend(notice);
+        (page.querySelector('.page-content') ?? page).prepend(notice);
       }
       notice.setAttribute('role', error ? 'alert' : 'status');
       notice.setAttribute('aria-live', error ? 'assertive' : 'polite');
       notice.textContent = `Threadhold: ${message}`;
       notice.dataset.error = String(error);
+      return notice;
     }
     async function request(command: DraftRequest): Promise<DraftResult> {
       const response: ExtensionResponse = await browser.runtime.sendMessage({ channel: 'threadhold', request: command });
@@ -54,13 +72,17 @@ export default defineContentScript({
       return response.result;
     }
     async function current(): Promise<PrContext> {
-      const route = parsePrRoute(location.href);
-      if (!route || !context) throw new Error(t('No recognized PR context.', 'Geen herkende PR-context.'));
-      const expected = scopeKey(context.scope);
-      const fresh = await loadPrContext(route);
-      if (disposed || expected !== scopeKey(fresh.scope)) {
+      const active = context;
+      const version = generation;
+      if (!active || !onRoute(version)) throw new Error(t('No recognized PR context.', 'Geen herkende PR-context.'));
+      const fresh = await loadPrContext(active.scope.route);
+      if (!onRoute(version)) throw new Error(t('The PR context changed.', 'De PR-context is gewijzigd.'));
+      if (scopeKey(active.scope) !== scopeKey(fresh.scope)) {
+        const error = new Error(t('The Azure DevOps account or PR context changed.', 'Het Azure DevOps-account of de PR-context is gewijzigd.'));
+        const nextVersion = ++generation;
         reset();
-        throw new Error(t('Account or PR changed. Refresh the page before using drafts.', 'Account of PR gewijzigd. Ververs de pagina voordat je drafts gebruikt.'));
+        routeFailed(active.scope.route, nextVersion, error);
+        throw error;
       }
       context = fresh;
       return fresh;
@@ -71,19 +93,25 @@ export default defineContentScript({
       for (const card of cards.values()) card.remove();
       cards.clear(); publishControl?.remove(); publishControl = undefined; notice?.remove(); notice = undefined;
       draftHelp?.dispose(); draftHelp = undefined;
-      reanchorDraft = undefined;
+      routeNotice?.element.remove(); routeNotice = undefined;
+      reanchor?.notice.element.remove(); reanchor = undefined;
       drafts = []; context = undefined; threads = [];
       monacoBindings = []; monacoSignature = '';
     }
+    async function listDrafts(active: PrContext): Promise<Draft[]> {
+      const result = await request({ action: 'list', scope: active.scope });
+      if (!('drafts' in result)) throw new Error(t('Draft list unavailable.', 'Draftlijst niet beschikbaar.'));
+      return result.drafts;
+    }
     async function refresh(reportErrors = true) {
-      if (refreshing || !context) return;
-      refreshing = true;
+      if (!context || !onRoute(generation) || refreshing === generation) return;
       const version = generation;
+      refreshing = version;
       const active = context;
       try {
-        const result = await request({ action: 'list', scope: active.scope });
-        if (disposed || version !== generation || !('drafts' in result)) return;
-        drafts = result.drafts;
+        const listed = await listDrafts(active);
+        if (!onRoute(version)) return;
+        drafts = listed;
         for (const state of editors.values()) {
           if (!state.draft) continue;
           const saved = drafts.find(draft => draft.id === state.draft!.id);
@@ -92,16 +120,27 @@ export default defineContentScript({
         }
         render();
         scheduleMonaco();
-      } catch (error) { if (reportErrors && version === generation) show(String(error), true); }
-      finally { refreshing = false; }
+      } catch (error) { if (reportErrors && onRoute(version)) show(String(error), true); }
+      finally { if (refreshing === version) refreshing = undefined; }
     }
     const actions: DraftUiActions = {
       async edit(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
-        threads = await readThreads(fresh);
-        if (draft.state !== 'saved' || isStale(draft, fresh, threads)) throw new Error(t('This draft cannot be safely attached to its original location.', 'Deze draft kan niet veilig aan de oorspronkelijke locatie worden gekoppeld.'));
-        const editor = await openDraftEditor(draft, fresh, threads);
-        if (editor.textarea.closest('.monaco-editor')) monacoBindings = await readMonacoBindings(fresh);
+        if (!onScope(version, scope)) return;
+        const loadedThreads = await readThreads(fresh);
+        if (!onScope(version, scope)) return;
+        if (draft.state !== 'saved' || isStale(draft, fresh, loadedThreads)) throw new Error(t('This draft cannot be safely attached to its original location.', 'Deze draft kan niet veilig aan de oorspronkelijke locatie worden gekoppeld.'));
+        const editor = await openDraftEditor(draft, fresh, loadedThreads);
+        if (!onScope(version, scope)) return;
+        if (editor.textarea.closest('.monaco-editor')) {
+          const bindings = await readMonacoBindings(fresh);
+          if (!onScope(version, scope)) return;
+          monacoBindings = bindings;
+        }
+        threads = loadedThreads;
         const text = readEditor(editor);
         if (text.trim() && text !== draft.body) throw new Error(t('The native editor contains different text. Save or remove that text yourself first.', 'De native editor bevat andere tekst. Bewaar of verwijder die tekst eerst zelf.'));
         mountEditors();
@@ -129,23 +168,40 @@ export default defineContentScript({
         location.assign(url.href);
       },
       async check(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
+        if (!onScope(version, scope)) return;
         const found = await findPublication(draft, fresh);
+        if (!onScope(version, scope)) return;
         if (!found) throw new Error(t('The exact comment from the publication receipt could not be confirmed. The draft is retained; check for duplicates before publishing again.', 'De exacte comment uit de ontvangstbevestiging kon niet worden bevestigd. Draft blijft behouden; publiceer niet opnieuw zonder controle op duplicaten.'));
         await request({ action: 'finishSubmit', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, outcome: 'published', remoteThreadId: found.threadId, remoteCommentId: found.commentId });
         await refresh();
-        show(t('Publication confirmed; local draft removed.', 'Publicatie bevestigd; lokale draft opgeruimd.'));
+        if (onScope(version, scope)) show(t('Publication confirmed; local draft removed.', 'Publicatie bevestigd; lokale draft opgeruimd.'));
       },
       reanchor(draft) {
-        if (!context || parsePrRoute(location.href)?.prUrl !== context.scope.route.prUrl || scopeKey(draft.scope) !== scopeKey(context.scope)) {
-          throw new Error(t('The PR context changed.', 'De PR-context is gewijzigd.'));
-        }
-        reanchorDraft = draft;
-        for (const state of editors.values()) state.controls.button.textContent = t('Reattach draft here', 'Draft hier koppelen');
-        show(t('Open the correct native comment location and choose Reattach draft here. The original draft is retained until the new location is confirmed.', 'Open de juiste native commentlocatie en kies Draft hier koppelen. De oorspronkelijke draft blijft bewaard tot de nieuwe locatie is bevestigd.'));
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!context || !onRoute(version) || scope !== scopeKey(context.scope)) throw new Error(t('The PR context changed.', 'De PR-context is gewijzigd.'));
+        if (reanchor?.committing) throw new Error(t('A new draft location is already being saved.', 'Er wordt al een nieuwe draftlocatie opgeslagen.'));
+        const reattachNotice = createActionNotice(t('Cancel reattach', 'Koppelen annuleren'), 'cancel-reanchor', () => {
+          if (!isReattaching(selection) || selection.committing) return;
+          setReattach();
+          const status = show(t('Reattach cancelled. The draft and editor text are unchanged.', 'Koppelen geannuleerd. Draft en editortekst zijn ongewijzigd.'));
+          const origin = cards.get(draft.id)?.querySelector<HTMLButtonElement>('[data-threadhold-action="reanchor"]');
+          (origin ?? status)?.focus();
+        });
+        const selection: Reattach = { draft, scope, generation: version, notice: reattachNotice, committing: false };
+        setReattach(selection);
+        reattachNotice.report(t('Open the correct native comment location and choose Reattach draft here. The original draft is retained until the new location is confirmed.', 'Open de juiste native commentlocatie en kies Draft hier koppelen. De oorspronkelijke draft blijft bewaard tot de nieuwe locatie is bevestigd.'));
       },
       async reset(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
+        if (!onScope(version, scope)) return;
         if (!window.confirm(t('This comment may already have been published. Check Azure DevOps first: publishing again may create a duplicate. Edit again anyway?', 'Deze comment kan al gepubliceerd zijn. Controleer Azure DevOps eerst: opnieuw publiceren kan een duplicaat maken. Toch opnieuw bewerken?'))) throw new Error(t('Draft retained unchanged.', 'Draft ongewijzigd behouden.'));
         await request({ action: 'finishSubmit', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, outcome: 'failed' });
         await refresh();
@@ -166,7 +222,7 @@ export default defineContentScript({
       publishControl?.remove();
       publishControl = createPublishControl(drafts, async () => {
         try { await publishAll(); }
-        catch (error) { if (version === generation) show(String(error), true); throw error; }
+        catch (error) { if (onRoute(version)) show(String(error), true); throw error; }
       });
       publishControl.disabled ||= batchPublishing;
       headerActionAnchor()?.after(publishControl);
@@ -199,7 +255,7 @@ export default defineContentScript({
       const version = generation;
       const fresh = await current();
       const scope = scopeKey(fresh.scope);
-      const mayStart = () => !disposed && generation === version && parsePrRoute(location.href)?.prUrl === fresh.scope.route.prUrl;
+      const mayStart = () => onScope(version, scope);
       const initialThreads = await readThreads(fresh);
       if (!mayStart()) return;
       const listed = await request({ action: 'list', scope: fresh.scope });
@@ -257,7 +313,7 @@ export default defineContentScript({
         throw error;
       } finally {
         batchPublishing = false;
-        await refresh();
+        await refresh(mayStart());
       }
     }
     function endEditorSession(state: EditorState) {
@@ -284,6 +340,73 @@ export default defineContentScript({
       state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
       if (collapse) readNativeEditorActions(state.editor.root)?.cancel?.click();
     }
+    function isReattaching(selection: Reattach): boolean {
+      return reanchor === selection && onScope(selection.generation, selection.scope);
+    }
+    function bindReattach(state: EditorState) {
+      const selection = reanchor;
+      state.controls.setReattach(selection && (isCurrent => confirmReattach(selection, state, isCurrent)));
+    }
+    function setReattach(selection?: Reattach) {
+      reanchor?.notice.element.remove();
+      reanchor = selection;
+      for (const state of editors.values()) bindReattach(state);
+      mountActionNotices();
+    }
+    function validateAnchor(editor: NativeEditor, fresh: PrContext, activeThreads: RemoteThread[]) {
+      if (editor.anchor.kind === 'inline' && (editor.anchor.sourceCommit !== fresh.sourceCommit || editor.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
+      if (editor.anchor.kind === 'reply' && !activeThreads.some(thread => thread.id === editor.anchor.threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
+    }
+    function isEditorSession(state: EditorState, requestId?: string): boolean {
+      const { textarea, root } = state.editor;
+      return state.requestId === requestId && editors.get(textarea) === state
+        && textarea.closest('.repos-comment-editor-fit') === root && textarea.getClientRects().length > 0;
+    }
+    async function confirmReattach(selection: Reattach, state: EditorState, isCurrent: () => boolean) {
+      if (!isReattaching(selection)) return;
+      const session = state.requestId;
+      const stillAttaching = () => isCurrent() && isReattaching(selection) && isEditorSession(state, session);
+      const fresh = await current();
+      if (!stillAttaching() || scopeKey(fresh.scope) !== selection.scope) return;
+      const loadedThreads = await readThreads(fresh);
+      if (!stillAttaching()) return;
+      if (selection.committing) throw new Error(t('A new draft location is already being saved.', 'Er wordt al een nieuwe draftlocatie opgeslagen.'));
+      const editor = state.editor;
+      validateAnchor(editor, fresh, loadedThreads);
+      const { draft } = selection;
+      const text = readEditor(editor);
+      if (text.trim() && text !== draft.body) throw new Error(t('This editor contains different text. Save or remove that text yourself first.', 'Deze editor bevat andere tekst. Bewaar of verwijder die eerst zelf.'));
+
+      // Cancellation is safe until the local storage write is dispatched.
+      selection.committing = true;
+      selection.notice.button.disabled = true;
+      try {
+        const result = await request({ action: 'update', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, body: draft.body, anchor: { ...editor.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit } });
+        if (!isReattaching(selection)) return;
+        if (!('draft' in result)) throw new Error(t('No durable storage confirmation.', 'Geen duurzame opslagbevestiging.'));
+        const canUpdateEditor = stillAttaching();
+        threads = loadedThreads;
+        setReattach();
+        if (canUpdateEditor) {
+          if (readEditor(state.editor) !== text) {
+            startEditing(state, result.draft);
+            state.controls.report(t('The editor still contains unsaved text. Save again to keep it.', 'De editor bevat nog niet-opgeslagen tekst. Sla opnieuw op om die te bewaren.'));
+            show(t('New native location confirmed. The editor still contains unsaved text; save again to keep it.', 'Nieuwe native locatie bevestigd. De editor bevat nog niet-opgeslagen tekst; sla opnieuw op om die te bewaren.'));
+          } else {
+            state.draft = result.draft;
+            state.controls.setBinding(result.draft);
+            writeEditor(state.editor, result.draft.body);
+            state.controls.report(t('New native location confirmed; draft ID retained.', 'Nieuwe native locatie bevestigd; draft-ID behouden.'));
+          }
+        }
+        await refresh(false);
+      } finally {
+        if (isReattaching(selection)) {
+          selection.committing = false;
+          selection.notice.button.disabled = false;
+        }
+      }
+    }
     function mountEditors() {
       if (!context) return;
       for (const [element, state] of editors) if (!element.isConnected) { state.dispose(); editors.delete(element); }
@@ -300,71 +423,45 @@ export default defineContentScript({
         }
         if (existing) { existing.dispose(); editors.delete(editor.textarea); }
         const controls = createSaveControl(async isCurrent => {
+          if (!context) return;
           const version = generation;
-          const pathname = location.pathname;
-          const samePr = () => !disposed && generation === version && location.pathname === pathname;
-          const stillActive = () => isCurrent() && samePr() && editors.get(editor.textarea) === state
-            && editor.textarea.closest('.repos-comment-editor-fit') === editor.root && editor.textarea.getClientRects().length > 0;
-          const keepEditing = (draft: Draft) => {
-            startEditing(state, draft);
-            controls.report(t('The editor still contains unsaved text. Save again to keep it.', 'De editor bevat nog niet-opgeslagen tekst. Sla opnieuw op om die te bewaren.'));
-          };
+          const scope = scopeKey(context.scope);
+          const session = state.requestId ??= crypto.randomUUID();
+          const bound = state.draft;
+          const stillSaving = () => isCurrent() && onScope(version, scope) && isEditorSession(state, session);
+          if (!stillSaving() || (bound && scopeKey(bound.scope) !== scope)) return;
           try {
             const fresh = await current();
-            if (!stillActive()) return;
+            if (!stillSaving() || scopeKey(fresh.scope) !== scope) return;
             const loadedThreads = await readThreads(fresh);
-            if (!stillActive()) return;
-            threads = loadedThreads;
-            const active = state.editor;
-            if (active.anchor.kind === 'inline' && (active.anchor.sourceCommit !== fresh.sourceCommit || active.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
-            const threadId = active.anchor.threadId;
-            if (active.anchor.kind === 'reply' && !threads.some(thread => thread.id === threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
-            const body = readEditor(active);
-            const reattaching = reanchorDraft;
-            if (reattaching) {
-              if (body.trim() && body !== reattaching.body) throw new Error(t('This editor contains different text. Save or remove that text yourself first.', 'Deze editor bevat andere tekst. Bewaar of verwijder die eerst zelf.'));
-              const result = await request({ action: 'update', scope: fresh.scope, id: reattaching.id, ifRevision: reattaching.revision, body: reattaching.body, anchor: active.anchor });
-              if (!('draft' in result)) throw new Error(t('No durable storage confirmation.', 'Geen duurzame opslagbevestiging.'));
-              if (!samePr()) return;
-              if (reanchorDraft === reattaching) {
-                reanchorDraft = undefined;
-                for (const item of editors.values()) item.controls.setBinding(item.draft);
-              }
-              if (stillActive()) {
-                if (readEditor(state.editor) !== body) {
-                  keepEditing(result.draft);
-                  show(t('New native location confirmed. The editor still contains unsaved text; save again to keep it.', 'Nieuwe native locatie bevestigd. De editor bevat nog niet-opgeslagen tekst; sla opnieuw op om die te bewaren.'));
-                } else {
-                  state.draft = result.draft; controls.setBinding(result.draft);
-                  writeEditor(state.editor, result.draft.body);
-                  controls.report(t('New native location confirmed; draft ID retained.', 'Nieuwe native locatie bevestigd; draft-ID behouden.'));
-                }
-              }
-              await refresh(false);
-              return;
-            }
-            if (state.draft && isStale(state.draft, fresh, threads)) throw new Error(t('Location is outdated. Draft text is retained; explicitly choose a new native location.', 'Locatie verouderd. Drafttekst blijft bewaard; kies expliciet een nieuwe native locatie.'));
-            const result = state.draft
-              ? await request({ action: 'update', scope: fresh.scope, id: state.draft.id, ifRevision: state.draft.revision, body })
-              : await request({ action: 'create', scope: fresh.scope, anchor: { ...active.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId: state.requestId ??= crypto.randomUUID() });
+            if (!stillSaving()) return;
+            const target = state.editor;
+            validateAnchor(target, fresh, loadedThreads);
+            if (bound && isStale(bound, fresh, loadedThreads)) throw new Error(t('Location is outdated. Draft text is retained; explicitly choose a new native location.', 'Locatie verouderd. Drafttekst blijft bewaard; kies expliciet een nieuwe native locatie.'));
+            const body = readEditor(target);
+            const result = bound
+              ? await request({ action: 'update', scope: fresh.scope, id: bound.id, ifRevision: bound.revision, body })
+              : await request({ action: 'create', scope: fresh.scope, anchor: { ...target.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId: session });
+            if (!onScope(version, scope)) return;
             if (!('draft' in result)) throw new Error(t('No durable storage confirmation received.', 'Geen duurzame opslagbevestiging ontvangen.'));
-            if (!samePr()) return;
-            if (stillActive()) {
+            if (stillSaving()) {
+              threads = loadedThreads;
               const revision = result.draft.revision;
               if (readEditor(state.editor) !== body || result.draft.body !== body) {
-                keepEditing(result.draft);
+                startEditing(state, result.draft);
+                controls.report(t('The editor still contains unsaved text. Save again to keep it.', 'De editor bevat nog niet-opgeslagen tekst. Sla opnieuw op om die te bewaren.'));
                 show(t(`Draft saved locally · revision ${revision}. The editor still contains unsaved text.`, `Draft lokaal opgeslagen · revisie ${revision}. De editor bevat nog niet-opgeslagen tekst.`));
               } else {
                 const message = t(`Draft saved locally · revision ${revision}.`, `Draft lokaal opgeslagen · revisie ${revision}.`);
                 finishEditing(state, true);
                 if (controls.element.isConnected) controls.report(message, 'saved');
-                show(message);
+                if (onScope(version, scope)) show(message);
               }
             }
-            // An obsolete save may still have committed. Refresh the card, not the editor's feedback.
+            // An obsolete save can still commit. Refresh the same scope's cards, not the old editor.
             await refresh(false);
           } catch (error) {
-            if (stillActive()) throw error;
+            if (stillSaving()) throw error;
           }
         });
         const state: EditorState = { editor, controls, editing: false, dispose() {
@@ -410,7 +507,7 @@ export default defineContentScript({
         }
         editor.root.addEventListener('click', onClick, true); editor.root.addEventListener('keydown', onKey, true);
         editor.actions.prepend(controls.element); editors.set(editor.textarea, state);
-        if (reanchorDraft) controls.button.textContent = t('Reattach draft here', 'Draft hier koppelen');
+        bindReattach(state);
       }
     }
     function scheduleMonaco() {
@@ -426,32 +523,61 @@ export default defineContentScript({
       void (async () => {
         try {
           await syncMonacoDraftSlots(active);
+          if (!onRoute(version)) return;
           const bindings = await readMonacoBindings(active);
-          if (disposed || generation !== version) return;
+          if (!onRoute(version)) return;
           monacoBindings = bindings;
           mountEditors();
           render();
         } catch (error) {
-          if (generation === version) show(t(`The exact code comment location is unavailable: ${String(error)} Your text is retained.`, `De exacte codecommentlocatie is niet beschikbaar: ${String(error)} Je tekst blijft behouden.`), true);
+          if (onRoute(version)) show(t(`The exact code comment location is unavailable: ${String(error)} Your text is retained.`, `De exacte codecommentlocatie is niet beschikbaar: ${String(error)} Je tekst blijft behouden.`), true);
         } finally {
           monacoPending = false;
-          if (!disposed) scheduleMonaco();
+          if (onRoute(generation)) scheduleMonaco();
         }
       })();
     }
-    async function routeChanged() {
-      const route = parsePrRoute(location.href);
-      const key = route?.prUrl ?? '';
-      if (key === routeKey || disposed) return;
-      routeKey = key; generation++; const version = generation;
-      reset();
-      if (!route) return;
+    function routeFailed(route: PrRoute, version: number, error: unknown) {
+      const retry = routeNotice ??= createActionNotice(t('Retry', 'Opnieuw proberen'), 'retry', () => {
+        if (!onRoute(version)) return;
+        retry.button.setAttribute('aria-disabled', 'true');
+        retry.report(t('Reconnecting to this PR…', 'Opnieuw verbinden met deze PR…'));
+        void integrate(route, version);
+      });
+      retry.button.removeAttribute('aria-disabled');
+      mountActionNotices();
+      retry.report(t(`Integration unavailable: ${String(error)} Editor text remains unchanged.`, `Integratie niet beschikbaar: ${String(error)} Editortekst blijft ongewijzigd.`), true);
+    }
+    async function integrate(route: PrRoute, version: number) {
       try {
         const fresh = await loadPrContext(route);
+        if (!onRoute(version)) return;
         const loadedThreads = await readThreads(fresh);
-        if (version !== generation || disposed) return;
-        context = fresh; threads = loadedThreads; await refresh(); mountEditors();
-      } catch (error) { if (version === generation) show(t(`Integration unavailable: ${String(error)} Editor text remains unchanged.`, `Integratie niet beschikbaar: ${String(error)} Editortekst blijft ongewijzigd.`), true); }
+        if (!onRoute(version)) return;
+        const listed = await listDrafts(fresh);
+        if (!onRoute(version)) return;
+        context = fresh; threads = loadedThreads; drafts = listed;
+        render();
+        mountEditors();
+        scheduleMonaco();
+        if (routeNotice) {
+          const focused = document.activeElement === routeNotice.button;
+          routeNotice.element.remove(); routeNotice = undefined;
+          const status = show(t('Draft integration restored.', 'Draftintegratie hersteld.'));
+          if (focused) status?.focus();
+        }
+      } catch (error) {
+        if (onRoute(version)) routeFailed(route, version, error);
+      }
+    }
+    function routeChanged() {
+      const route = parsePrRoute(location.href);
+      const key = route?.prUrl ?? '';
+      if (disposed || key === routeKey) return;
+      routeKey = key;
+      const version = ++generation;
+      reset();
+      if (route) void integrate(route, version);
     }
     let scheduled = false;
     const observer = new MutationObserver((records) => {
@@ -459,16 +585,22 @@ export default defineContentScript({
       scheduled = true;
       ctx.requestAnimationFrame(() => {
         scheduled = false;
+        mountActionNotices();
         mountEditors();
         scheduleMonaco();
         if (context && (((!publishControl?.isConnected || !draftHelp?.button.isConnected) && headerActionAnchor()) || drafts.some(draft => !cards.get(draft.id)?.isConnected && (findDraftLocation(draft, threads) || document.querySelector('.activity-feed-list'))))) render();
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    ctx.setInterval(() => { void routeChanged(); }, 500);
-    ctx.addEventListener(window, 'focus', () => { void current().then(() => refresh()).catch(error => show(String(error), true)); });
-    ctx.addEventListener(document, 'visibilitychange', () => { if (!document.hidden && context) void current().then(() => refresh()).catch(error => show(String(error), true)); });
+    function refreshCurrent() {
+      const version = generation;
+      if (!context || !onRoute(version)) return;
+      void current().then(() => { if (onRoute(version)) return refresh(); }).catch(error => { if (onRoute(version)) show(String(error), true); });
+    }
+    ctx.addEventListener(window.navigation, 'currententrychange', routeChanged);
+    ctx.addEventListener(window, 'focus', refreshCurrent);
+    ctx.addEventListener(document, 'visibilitychange', () => { if (!document.hidden) refreshCurrent(); });
     ctx.onInvalidated(() => { disposed = true; generation++; observer.disconnect(); disposeNativeDiffCapture(); reset(); });
-    void routeChanged();
+    routeChanged();
   },
 });

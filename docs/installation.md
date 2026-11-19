@@ -52,17 +52,19 @@ The extension follows the browser's `navigator.language`. English is the default
 | Save as draft | Opslaan als draft |
 | Edit / Save / Cancel | Bewerken / Opslaan / Annuleren |
 | Delete draft | Draft verwijderen |
+| Retry | Opnieuw proberen |
+| Reattach / Reattach draft here / Cancel reattach | Opnieuw koppelen / Draft hier koppelen / Koppelen annuleren |
 | Publish drafts (n) | Drafts plaatsen (n) |
 | Draft help | Drafthulp |
 
 The instructions below use English extension labels.
 
-- Write in the **native editor** and choose **Save as draft**. The editor closes and the draft card appears only after durable local storage succeeds. The card renders Markdown locally with sanitization; the original Markdown remains the exact source for editing and publishing. DevOps mention references remain readable without external identity resolution.
+- Write in the **native editor** and choose **Save as draft**. The draft card appears only after durable local storage succeeds. The editor closes only if it is still in the same edit session and its text has not changed during the write. The card renders Markdown locally with sanitization; the original Markdown remains the exact source for editing and publishing. DevOps mention references remain readable without external identity resolution.
 - The **Edit** pencil opens the original native editor with the saved text, even when the general composer is collapsed. Other existing editor content is not overwritten. **Save** and Ctrl+Enter update the local draft; its ID stays the same and its revision increases.
 - **Cancel** discards only the unsaved edit. The last saved draft remains.
 - The **Delete draft** trash icon asks for confirmation and removes only the local draft.
 - There is no draft tab or navigation index. Drafts appear alongside ordinary comments. An unmounted or outdated location gets a recovery card among the Overview comments.
-- After code changes, use the relinking action, open the intended new native editor and confirm attaching the draft there. There is no automatic line remapping.
+- If a draft location is outdated, choose **Reattach** on its card, open the intended native comment editor and choose **Reattach draft here**. There is no automatic line remapping. **Cancel reattach** restores the normal draft buttons and leaves the saved draft and editor text unchanged. Switching PRs also clears reattach mode.
 - **Publish drafts (n)** beside **Approve**, or beside the native **Publish** action on a draft PR, asks for confirmation and then publishes the saved drafts one at a time. This does not approve the PR, publish the draft PR itself or resolve threads.
 - Threadhold keeps the draft until a GET in the original PR confirms the receipt's exact thread and comment IDs, author and content. Replies must be in their original discussion; inline comments must match the original file, side and range. Matching text alone never confirms publication.
 - If publication cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** makes no remote writes and can verify a saved receipt after reload. Without a valid receipt, including for older pending drafts, inspect Azure DevOps manually. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic POST retry.
@@ -72,6 +74,8 @@ The instructions below use English extension labels.
 General comments, replies and inline drafts use the existing Azure DevOps editor. Single- and multi-line anchors preserve start and end lines and columns, in inline view and on both sides of side-by-side view. In **All Changes**, the extension captures the native side/line selection before focus and DOM replacement; temporary negative thread IDs are not limited to `-1`. The Monaco single-file editor uses the public editor API for selection, viewzone spacing and bounded interactive overlays above the code layer, not hidden React state. An anonymous original model is linked only through its unique modified partner within the same diff, with the repository and source commit checked.
 
 Azure DevOps does not provide a stable contract for this DOM extension. Unknown or ambiguous locations do not receive a guessed draft binding. A UI update may require adapter changes. Ordinary native publication without a draft binding remains unchanged.
+
+If Threadhold cannot load the PR integration or initialize local storage, choose **Retry** in its message on that PR. This does not reload the page or change native editor text. Threadhold does not retry PR requests automatically.
 
 ## Browser agents
 
@@ -92,7 +96,7 @@ Wait for the resulting card, higher revision or removal, not a fixed sleep or me
 
 ## Privacy and recovery
 
-- Drafts live in IndexedDB in the **extension origin**, separated by organization, project, repository, PR and stable user ID.
+- Drafts live in IndexedDB in the **extension origin**, separated by organization (and explicit collection for legacy Visual Studio URLs), project, repository, PR and stable user ID.
 - No PAT, external backend, telemetry or browser sync. Context is read through GET requests using the existing browser session. Only the explicitly confirmed publication action sends comment POST requests to the same Azure DevOps origin.
 - Threadhold does not encrypt the database. Scripts on the Azure DevOps page can read draft text displayed there. “Local only” does not mean “invisible to page code.”
 - Multi-tab updates use revision checks. A conflict does not overwrite another revision; the native editor retains the text.

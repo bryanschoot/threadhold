@@ -11,7 +11,7 @@ export interface DraftUiActions {
   reset(draft: Draft): void | Promise<void>;
 }
 
-type Action = 'save' | 'edit' | 'delete' | 'locate' | 'check' | 'reanchor' | 'reset' | 'help';
+type Action = 'save' | 'edit' | 'delete' | 'locate' | 'check' | 'reanchor' | 'reset' | 'help' | 'retry' | 'cancel-reanchor';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -58,6 +58,25 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === 'string' && error.trim()) return error;
   return t('The action failed. Please try again.', 'De actie is mislukt. Probeer het opnieuw.');
+}
+
+export interface ActionNotice {
+  element: HTMLElement;
+  button: HTMLButtonElement;
+  report(message: string, error?: boolean): void;
+}
+
+export function createActionNotice(label: string, action: 'retry' | 'cancel-reanchor', onClick: () => void): ActionNotice {
+  const container = element('div', 'th-save');
+  const status = liveStatus();
+  const button = actionButton(label, action);
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!button.disabled && button.getAttribute('aria-disabled') !== 'true') onClick();
+  });
+  container.append(status, button);
+  return { element: container, button, report: (message: string, error = false) => report(status, `Threadhold: ${message}`, error) };
 }
 
 function anchorDescription(draft: Draft): string {
@@ -355,22 +374,26 @@ export interface SaveControl {
   button: HTMLButtonElement;
   setBinding(draft?: Draft): void;
   setEditing(editing: boolean): void;
-  report(message: string, kind?: 'message' | 'saved'): void;
   reset(): void;
+  setReattach(action?: SaveAction): void;
+  report(message: string, kind?: 'message' | 'saved'): void;
 }
-export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<void>): SaveControl {
+type SaveAction = (isCurrent: () => boolean) => Promise<void>;
+export function createSaveControl(onSave: SaveAction): SaveControl {
   const container = element('div', 'th-save');
   const button = actionButton(t('Save as draft', 'Opslaan als draft'), 'save');
-  button.title = t('Save locally as a draft · only visible to you', 'Lokaal opslaan als draft · alleen voor jou');
   const status = liveStatus();
   container.append(button, status);
   let binding: Draft | undefined;
-  let pending: { reported: boolean } | undefined;
+  let reattach: SaveAction | undefined;
+  let pending: { action: SaveAction; reported: boolean } | undefined;
   let editing = false;
   function update(): void {
-    button.classList.toggle('primary', editing && binding !== undefined);
-    button.textContent = editing && binding ? t('Save', 'Opslaan') : binding ? t('Update draft', 'Draft bijwerken') : t('Save as draft', 'Opslaan als draft');
-    button.disabled = !!pending || (binding !== undefined && binding.state !== 'saved');
+    const blocked = binding !== undefined && binding.state !== 'saved';
+    button.classList.toggle('primary', !reattach && editing && binding !== undefined);
+    button.textContent = reattach ? t('Reattach draft here', 'Draft hier koppelen') : editing && binding ? t('Save', 'Opslaan') : binding ? t('Update draft', 'Draft bijwerken') : t('Save as draft', 'Opslaan als draft');
+    button.title = blocked ? t('Editing is disabled until the publication status has been checked.', 'Bewerken is uitgeschakeld totdat de publicatiestatus is gecontroleerd.') : reattach ? button.textContent : t('Save locally as a draft · only visible to you', 'Lokaal opslaan als draft · alleen voor jou');
+    button.disabled = !!pending || blocked;
     container.setAttribute('aria-busy', String(!!pending));
   }
   function setStatus(message: string, kind: 'message' | 'saved' | 'error' = 'message') {
@@ -385,13 +408,13 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
     event.preventDefault();
     event.stopPropagation();
     if (button.disabled) return;
-    const operation = { reported: false };
+    const operation = { action: reattach ?? onSave, reported: false };
     pending = operation;
     update();
-    setStatus(t('Saving draft…', 'Draft opslaan…'));
+    setStatus(reattach ? t('Checking the new location…', 'Nieuwe locatie wordt gecontroleerd…') : t('Saving draft…', 'Draft opslaan…'));
     void (async () => {
       try {
-        await onSave(() => pending === operation);
+        await operation.action(() => pending === operation);
       } catch (error) {
         if (pending === operation) reportResult(errorMessage(error), 'error');
       } finally {
@@ -403,6 +426,7 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
       }
     })();
   });
+  update();
   return {
     element: container,
     button,
@@ -410,16 +434,13 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
       binding = draft;
       bindDraft(container, draft);
       bindDraft(button, draft);
-      const blocked = draft !== undefined && draft.state !== 'saved';
-      button.title = blocked ? t('Editing is disabled until the publication status has been checked.', 'Bewerken is uitgeschakeld totdat de publicatiestatus is gecontroleerd.') : t('Save locally as a draft · only visible to you', 'Lokaal opslaan als draft · alleen voor jou');
-      if (blocked) reportResult(button.title);
       update();
+      if (draft && draft.state !== 'saved') reportResult(button.title);
     },
     setEditing(value) {
       editing = value;
       update();
     },
-    report: reportResult,
     reset() {
       if (pending) {
         pending = undefined;
@@ -427,6 +448,16 @@ export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<
       }
       setStatus('');
     },
+    setReattach(action) {
+      if (action === reattach) return;
+      if (reattach) {
+        if (pending?.action === reattach) pending = undefined;
+        if (!pending) setStatus('');
+      }
+      reattach = action;
+      update();
+    },
+    report: reportResult,
   };
 }
 

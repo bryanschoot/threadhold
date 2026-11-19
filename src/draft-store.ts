@@ -1,6 +1,6 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { isPositiveId, scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type PrRoute, type Scope } from './contracts';
-import { parsePrRoute } from './routes';
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
+import { isPositiveId, scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type Scope } from './contracts';
+import { parsePrRoute, samePrRoute } from './routes';
 import { t } from './i18n';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -28,10 +28,6 @@ function positive(value: unknown, name: string): asserts value is number {
 function body(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.includes('\0') || value.length > MAX_BODY_BYTES || encoder.encode(value).byteLength > MAX_BODY_BYTES) invalid(t('Body must contain text and be at most 1 MiB in UTF-8.', 'De inhoud moet tekst bevatten en mag maximaal 1 MiB groot zijn in UTF-8.'));
 }
-const equal = (left: string, right: string): boolean => left.toLowerCase() === right.toLowerCase();
-function sameRoute(left: PrRoute, right: PrRoute): boolean {
-  return equal(left.origin, right.origin) && equal(left.organization, right.organization) && equal(left.project, right.project) && equal(left.repository, right.repository) && left.pullRequestId === right.pullRequestId;
-}
 function validateScope(value: unknown): asserts value is Scope {
   object(value, 'Scope');
   keys(value, ['route', 'projectId', 'repositoryId', 'userId'], 'Scope');
@@ -42,10 +38,7 @@ function validateScope(value: unknown): asserts value is Scope {
   for (const key of ['origin', 'organization', 'project', 'repository', 'organizationUrl', 'prUrl']) text(route[key], `Route ${key}`);
   positive(route.pullRequestId, 'Pull request ID');
   const parsed = parsePrRoute(route.prUrl as string);
-  if (!parsed || route.origin !== parsed.origin || !sameRoute(parsed, route as unknown as PrRoute)) invalid('Scope must match a supported Azure DevOps PR URL.');
-  let organizationUrl: URL;
-  try { organizationUrl = new URL(route.organizationUrl as string); } catch { invalid('Organization URL is invalid.'); }
-  if (organizationUrl.search || organizationUrl.hash || organizationUrl.username || organizationUrl.password || !equal(organizationUrl.href.replace(/\/$/u, ''), parsed.organizationUrl)) invalid('Organization URL must match the PR organization.');
+  if (!parsed || !samePrRoute(parsed, route as unknown as Scope['route'])) invalid('Scope must match a supported Azure DevOps PR URL.');
 }
 function validateAnchor(value: unknown, scope: Scope): asserts value is Anchor {
   object(value, 'Anchor');
@@ -53,7 +46,7 @@ function validateAnchor(value: unknown, scope: Scope): asserts value is Anchor {
   if (value.kind !== 'general' && value.kind !== 'inline' && value.kind !== 'reply') invalid('Anchor kind is unsupported.');
   for (const key of ['sourceCommit', 'targetCommit', 'editorKey', 'pageUrl']) text(value[key], `Anchor ${key}`);
   const page = parsePrRoute(value.pageUrl as string);
-  if (!page || !sameRoute(page, scope.route)) invalid('Anchor page must match the draft PR.');
+  if (!page || !samePrRoute(page, scope.route)) invalid('Anchor page must match the draft PR.');
   if (value.filePath !== undefined) {
     text(value.filePath, 'File path');
     if (!value.filePath.startsWith('/')) invalid('File path must be repository-relative with a leading slash.');
@@ -131,6 +124,30 @@ interface DraftDatabase extends DBSchema {
   drafts: { key: string; value: StoredDraft; indexes: { 'by-scope': string; 'by-scope-updated': [string, string] } };
   requests: { key: [string, string]; value: CreateReceipt };
 }
+async function migrateLegacyCollections(transaction: IDBPTransaction<DraftDatabase, ('drafts' | 'requests')[], 'versionchange'>) {
+  const moved = new Map<string, string>();
+  const drafts = transaction.objectStore('drafts');
+  for (let cursor = await drafts.openCursor(); cursor; cursor = await cursor.continue()) {
+    const stored = cursor.value;
+    if (!stored.draft.scope.route.origin.endsWith('.visualstudio.com')) continue;
+    const route = parsePrRoute(stored.draft.scope.route.prUrl);
+    if (!route || route.organizationUrl === route.origin) continue;
+    stored.draft.scope.route = route;
+    stored.scopeKey = scopeKey(stored.draft.scope);
+    moved.set(stored.id, stored.scopeKey);
+    await cursor.update(stored);
+  }
+  if (!moved.size) return;
+  const requests = transaction.objectStore('requests');
+  for (let cursor = await requests.openCursor(); cursor; cursor = await cursor.continue()) {
+    const receipt = cursor.value;
+    const key = moved.get(receipt.draftId);
+    if (!key || key === receipt.scopeKey) continue;
+    await cursor.delete();
+    await requests.add({ ...receipt, scopeKey: key });
+  }
+}
+
 function canonicalAnchor(anchor: Anchor): unknown[] {
   return [anchor.kind, anchor.filePath ?? null, anchor.side ?? null, anchor.start?.line ?? null, anchor.start?.offset ?? null, anchor.end?.line ?? null, anchor.end?.offset ?? null, anchor.firstIteration ?? null, anchor.secondIteration ?? null, anchor.changeTrackingId ?? null, anchor.sourceCommit, anchor.targetCommit, anchor.threadId ?? null, anchor.editorKey, anchor.pageUrl];
 }
@@ -144,33 +161,51 @@ function storageError(error: unknown): DraftStoreError {
 }
 
 export class DraftStore {
-  private readonly database: Promise<IDBPDatabase<DraftDatabase>>;
+  private database?: Promise<IDBPDatabase<DraftDatabase>>;
   private closed = false;
   private recovery?: Promise<void>;
 
-  constructor(databaseName = 'threadhold') {
+  constructor(private readonly databaseName = 'threadhold') {
     text(databaseName, 'Database name', 256);
-    this.database = openDB<DraftDatabase>(databaseName, 1, {
-      upgrade(database) {
-        const drafts = database.createObjectStore('drafts', { keyPath: 'id' });
-        drafts.createIndex('by-scope', 'scopeKey');
-        drafts.createIndex('by-scope-updated', ['scopeKey', 'draft.updatedAt']);
-        database.createObjectStore('requests', { keyPath: ['scopeKey', 'requestId'] });
-      },
-    });
   }
 
-  /** Call once at worker startup, and await before admitting messages. Never call on reads. */
+  private openDatabase(): Promise<IDBPDatabase<DraftDatabase>> {
+    this.database ??= openDB<DraftDatabase>(this.databaseName, 2, {
+      upgrade(database, oldVersion, _newVersion, transaction) {
+        if (oldVersion === 0) {
+          const drafts = database.createObjectStore('drafts', { keyPath: 'id' });
+          drafts.createIndex('by-scope', 'scopeKey');
+          drafts.createIndex('by-scope-updated', ['scopeKey', 'draft.updatedAt']);
+          database.createObjectStore('requests', { keyPath: ['scopeKey', 'requestId'] });
+        } else {
+          void transaction.done.catch(() => undefined);
+          void migrateLegacyCollections(transaction).catch(() => {
+            try { transaction.abort(); } catch { /* Already aborted. */ }
+          });
+        }
+      },
+    }).catch(error => {
+      this.database = undefined;
+      throw error;
+    });
+    return this.database;
+  }
+
+  /** Gate worker requests on one successful startup recovery. Renew only a failed attempt. */
   recoverSubmissions(): Promise<void> {
-    this.recovery ??= this.recoverInterrupted();
+    this.recovery ??= this.recoverInterrupted().catch(error => {
+      this.recovery = undefined;
+      throw error;
+    });
     return this.recovery;
   }
 
   private async recoverInterrupted(): Promise<void> {
     if (this.closed) throw new DraftStoreError('CLOSED', t('Draft storage is closed.', 'De draftopslag is gesloten.'));
     try {
-      const database = await this.database;
+      const database = await this.openDatabase();
       const transaction = database.transaction('drafts', 'readwrite');
+      void transaction.done.catch(() => undefined);
       let cursor = await transaction.store.openCursor();
       while (cursor) {
         const stored = cursor.value;
@@ -193,7 +228,7 @@ export class DraftStore {
     const request = structuredClone(command);
     try {
       const hash = request.action === 'create' ? await fingerprint(request.body, request.anchor) : undefined;
-      const database = await this.database;
+      const database = await this.openDatabase();
       const key = scopeKey(request.scope);
       if (request.action === 'list' || request.action === 'get') {
         const transaction = database.transaction('drafts', 'readonly');
@@ -304,6 +339,6 @@ export class DraftStore {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    (await this.database).close();
+    (await this.database?.catch(() => undefined))?.close();
   }
 }

@@ -7,6 +7,7 @@
 - Download-first installation and manual update instructions; no Node.js required for release downloads.
 - Verify publication by exact Azure DevOps IDs, author, content and inline location. Keep unconfirmed drafts and their receipts for **Check publication**; an in-flight attempt can finish after a same-document PR switch or service-worker restart without retrying the POST.
 - Local design artifacts excluded from version control; installation documentation focuses on supported behavior and verification limits.
+- Recover from a failed PR integration or temporary local-storage startup error with **Retry**. Pending saves cannot affect a different account or editor session. Cancel reattaching a draft before saving the new location; switching PRs clears reattach mode. Legacy Visual Studio collections keep separate drafts.
 - Removed unused save-control API and unreachable publication branching; exact Monaco range capture no longer deduplicates all decorations.
 - Keep text typed during a draft save in the active editor; the next save updates the same draft. Native submit and cancel end the editor session without waiting for local storage.
 - Browser tests configure their language explicitly instead of deriving it from test titles.

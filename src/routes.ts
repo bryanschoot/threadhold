@@ -16,9 +16,7 @@ export function parsePrRoute(input: string): PrRoute | undefined {
     } else if (/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.visualstudio\.com$/iu.test(url.hostname)) {
       organization = url.hostname.split('.')[0]!;
       organizationUrl = url.origin;
-      if (parts.length === 6 && parts[0]!.toLowerCase() === 'defaultcollection') {
-        organizationUrl += `/${encodeURIComponent(parts.shift()!)}`;
-      }
+      if (parts.length === 6) organizationUrl += `/${encodeURIComponent(parts.shift()!)}`;
       if (parts.length !== 5) return;
     } else return;
     const [project, git, repository, pullrequest, id] = parts;
@@ -27,4 +25,14 @@ export function parsePrRoute(input: string): PrRoute | undefined {
     if (!Number.isSafeInteger(pullRequestId)) return;
     return { origin: url.origin, organization, organizationUrl, project, repository, pullRequestId, prUrl: `${url.origin}${url.pathname}` };
   } catch { return; }
+}
+
+/** Compare PR identity, including an explicit legacy collection when present. */
+export function samePrRoute(left: PrRoute, right: PrRoute): boolean {
+  return left.origin === right.origin &&
+    left.organizationUrl.toLowerCase() === right.organizationUrl.toLowerCase() &&
+    left.organization.toLowerCase() === right.organization.toLowerCase() &&
+    left.project.toLowerCase() === right.project.toLowerCase() &&
+    left.repository.toLowerCase() === right.repository.toLowerCase() &&
+    left.pullRequestId === right.pullRequestId;
 }

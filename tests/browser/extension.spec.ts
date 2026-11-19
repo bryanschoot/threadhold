@@ -1,4 +1,4 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -169,7 +169,7 @@ test.beforeEach(async ({ locale }) => {
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
         : pathname.endsWith('/threads') ? { value: visibleThreads }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
-        : /\/pullRequests\/\d+$/u.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
+        : /\/pullRequests\/\d+$/i.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
       await route.fulfill({ json }); return;
     }
@@ -180,6 +180,217 @@ test.beforeEach(async ({ locale }) => {
   await expect(page.getByRole('button', { name: english ? 'Save as draft' : 'Opslaan als draft', exact: true })).toBeVisible();
 });
 test.afterEach(async () => { await context?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
+
+test.describe('PR context lifecycle', () => {
+  const replyBody = 'Draft for the old reply location';
+  const threadGet = (pr: number) => new RegExp(`/pullRequests/${pr}/threads\\?`);
+  const editor = () => page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  const save = () => page.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const retry = () => page.getByRole('button', { name: 'Opnieuw proberen', exact: true });
+  const cancelReattach = () => page.getByRole('button', { name: 'Koppelen annuleren', exact: true });
+
+  async function openPr(pr: number) {
+    await page.evaluate(path => history.pushState(null, '', path), url.replace(/\/42$/, `/${pr}`));
+  }
+
+  async function holdThreads(pr: number, failure?: number) {
+    const arrived = Promise.withResolvers<Request>();
+    const release = Promise.withResolvers<void>();
+    await page.route(threadGet(pr), async route => {
+      arrived.resolve(route.request());
+      await release.promise;
+      await route.fulfill(failure ? { status: failure, json: {} } : { json: { value: [] } });
+    }, { times: 1 });
+    return {
+      arrived: arrived.promise,
+      release: release.resolve,
+      async finish() {
+        const request = await arrived.promise;
+        release.resolve();
+        const response = await request.response();
+        expect(response).not.toBeNull();
+        expect(await response!.finished()).toBeNull();
+      },
+    };
+  }
+
+  async function prepareStaleReply() {
+    const thread = page.locator('[data-existing-thread]');
+    await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+    await thread.locator('textarea').fill(replyBody);
+    await thread.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+    const card = page.locator('[data-threadhold-card]');
+    await expect(card.locator('.th-body')).toHaveText(replyBody);
+    const id = await card.getAttribute('data-threadhold-draft-id');
+    await page.route(threadGet(42), route => route.fulfill({ json: { value: [] } }));
+    await page.reload();
+    const stored = page.locator(`[data-threadhold-card][data-threadhold-draft-id="${id}"]`);
+    await stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true }).click();
+    return stored;
+  }
+
+  test('Retry recovers from a failed GET on the same page', async () => {
+    let attempts = 0;
+    await page.route(threadGet(43), route => ++attempts === 1
+      ? route.fulfill({ status: 503, json: {} })
+      : route.fallback());
+    await editor().fill('Native text already typed');
+    await openPr(43);
+    await expect(page.getByRole('alert')).toContainText('HTTP 503');
+    await expect(save()).toHaveCount(0);
+    await page.evaluate(() => {
+      history.replaceState(null, '', '?same-pr');
+      window.dispatchEvent(new Event('focus'));
+    });
+    await expect(retry()).toBeEnabled();
+    expect(attempts).toBe(1);
+
+    await retry().press('Enter');
+    await expect(save()).toBeVisible();
+    await expect(retry()).toHaveCount(0);
+    await expect(editor()).toHaveValue('Native text already typed');
+    expect(attempts).toBe(2);
+    await save().click();
+    await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Native text already typed');
+    expect(writes).toBe(0);
+  });
+
+  test('a late Retry failure does not change the next PR', async () => {
+    await page.route(threadGet(43), route => route.fulfill({ status: 503, json: {} }), { times: 1 });
+    await openPr(43);
+    await expect(retry()).toBeVisible();
+    const pending = await holdThreads(43, 502);
+    try {
+      await retry().click();
+      await pending.arrived;
+      await expect(retry()).toBeDisabled();
+      await openPr(44);
+      await expect(save()).toBeVisible();
+      await pending.finish();
+      await editor().fill('Draft in PR 44');
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Draft in PR 44');
+      await expect(retry()).toHaveCount(0);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('Cancel reattach restores Save while confirmation is pending', async () => {
+    const stored = await prepareStaleReply();
+    await editor().fill(replyBody);
+    const pending = await holdThreads(42);
+    try {
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await pending.arrived;
+      await cancelReattach().press('Enter');
+      await expect(save()).toBeEnabled();
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(editor()).toHaveValue(replyBody);
+      await pending.finish();
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText([replyBody, replyBody]);
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '1');
+      await expect(stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+
+      await stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true }).click();
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '2');
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(editor()).toHaveValue(replyBody);
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('switching PRs during pending reattach leaves both PRs independent', async () => {
+    const stored = await prepareStaleReply();
+    const pending = await holdThreads(42);
+    try {
+      await page.getByRole('button', { name: 'Draft hier koppelen', exact: true }).click();
+      await pending.arrived;
+      await openPr(43);
+      await expect(save()).toBeVisible();
+      await expect(cancelReattach()).toHaveCount(0);
+      await expect(stored).toHaveCount(0);
+      await pending.finish();
+      await expect(editor()).toHaveValue('');
+      await editor().fill('Independent draft in PR 43');
+      await save().click();
+      await expect(page.locator('[data-threadhold-card] .th-body')).toHaveText('Independent draft in PR 43');
+
+      await openPr(42);
+      await expect(stored.locator('.th-body')).toHaveText(replyBody);
+      await expect(stored).toHaveAttribute('data-threadhold-revision', '1');
+      await expect(stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('a pending save cannot read or clear text from the next editor session', async () => {
+    const card = page.locator('[data-threadhold-card]');
+    await editor().fill('Original draft');
+    await save().click();
+    await expect(card.locator('.th-body')).toHaveText('Original draft');
+    await card.getByRole('button', { name: 'Bewerken', exact: true }).click();
+    const editSave = page.getByRole('button', { name: 'Opslaan', exact: true });
+    await expect(editSave).toBeEnabled();
+    await editor().fill('Cancelled edit');
+    const pending = await holdThreads(42);
+    try {
+      await editSave.click();
+      await pending.arrived;
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await editor().fill('Text in the next session');
+      await pending.finish();
+      await expect(save()).toBeEnabled();
+      await expect(editor()).toHaveValue('Text in the next session');
+
+      await save().click();
+      await expect(card.locator('.th-body')).toHaveText(['Original draft', 'Text in the next session']);
+      await expect(card.filter({ hasText: 'Original draft' })).toHaveAttribute('data-threadhold-revision', '1');
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('a save awaiting validation cannot write or clear the next account’s editor', async () => {
+    let userId = 'user-id';
+    await page.route(url => url.pathname.endsWith('/connectionData'), route => route.fulfill({
+      json: { authenticatedUser: { id: userId, providerDisplayName: 'Reviewer' } },
+    }));
+    const switchAccount = async (id: string) => {
+      userId = id;
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await retry().click();
+      await expect(save()).toBeEnabled();
+    };
+    const cards = page.locator('[data-threadhold-card] .th-body');
+    await editor().fill('Pending text in account A');
+    const pending = await holdThreads(42);
+    try {
+      await save().click();
+      await pending.arrived;
+      await switchAccount('other-user');
+      await editor().fill('New text in account B');
+      await pending.finish();
+      await expect(editor()).toHaveValue('New text in account B');
+      await save().click();
+      await expect(cards).toHaveText('New text in account B');
+
+      await switchAccount('user-id');
+      await expect(cards).toHaveCount(0);
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+});
 
 async function duringDraftWrite(startSave: () => Promise<void>, whilePending: () => Promise<void>) {
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
@@ -499,7 +710,8 @@ test('header publication with an unconfirmed GET keeps the receipt across reload
   expect(writes).toBe(1);
 });
 
-test('header publication can finish an in-flight POST after switching PRs without starting another', async () => {
+for (const restart of [false, true]) {
+test(`header publication finishes after switching PRs${restart ? ' and restarting the worker' : ''} without another POST`, async () => {
   const textbox = page.getByRole('textbox', { name: 'Add a comment', exact: true });
   const save = page.locator('.repos-comment-editor-fit').filter({ has: textbox })
     .getByRole('button', { name: 'Opslaan als draft', exact: true });
@@ -527,6 +739,28 @@ test('header publication can finish an in-flight POST after switching PRs withou
     await textbox.fill('Separate draft on the next PR');
     await save.click();
     await expect(cards.locator('.th-body')).toHaveText('Separate draft on the next PR');
+    if (restart) {
+      const worker = context.serviceWorkers()[0]!;
+      const workerUrl = new URL(worker.url());
+      const popup = context.pages().find(tab => new URL(tab.url()).hostname === workerUrl.hostname)!;
+      const session = await context.newCDPSession(popup);
+      try {
+        const stopped = Promise.withResolvers<void>();
+        session.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+          for (const version of versions) {
+            if (version.scriptURL !== workerUrl.href) continue;
+            if (version.runningStatus === 'stopped') stopped.resolve();
+            if (version.runningStatus === 'running') {
+              void session.send('ServiceWorker.stopWorker', { versionId: version.versionId }).catch(stopped.reject);
+            }
+          }
+        });
+        await session.send('ServiceWorker.enable');
+        await stopped.promise;
+      } finally {
+        await session.detach();
+      }
+    }
   } finally {
     allowResponse.resolve();
   }
@@ -537,6 +771,7 @@ test('header publication can finish an in-flight POST after switching PRs withou
   await expect(cards.locator('.th-body')).toHaveText('Leave this draft on the original PR');
   expect(writes).toBe(1);
 });
+}
 
 for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) {
 test(`Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} draft survives native editing and reload`, async () => {

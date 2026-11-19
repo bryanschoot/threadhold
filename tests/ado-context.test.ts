@@ -82,6 +82,7 @@ describe('publication reconciliation', () => {
 describe('PR routing', () => {
   it('keeps organization and legacy collection boundaries explicit', () => {
     expect(parsePrRoute('https://org.visualstudio.com/DefaultCollection/p/_git/r/pullrequest/8')?.organizationUrl).toBe('https://org.visualstudio.com/DefaultCollection');
+    expect(parsePrRoute('https://org.visualstudio.com/Other%20Collection/p/_git/r/pullrequest/8')?.organizationUrl).toBe('https://org.visualstudio.com/Other%20Collection');
     expect(parsePrRoute('https://dev.azure.com/org/p/_git/r/pullRequest/8')?.pullRequestId).toBe(8);
   });
   it('rejects lookalike hosts, HTTP and non-PR routes', () => {

@@ -1,7 +1,7 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { browser } from 'wxt/browser';
 import { DraftStore, DraftStoreError, validateDraftRequest } from '../src/draft-store';
-import { parsePrRoute } from '../src/routes';
+import { parsePrRoute, samePrRoute } from '../src/routes';
 import type { ExtensionResponse, Scope } from '../src/contracts';
 import type { MonacoResponse } from '../src/monaco-types';
 import { executeMonacoRequest, validateMonacoRequest } from '../src/monaco-worker';
@@ -11,9 +11,8 @@ import { t } from '../src/i18n';
 export default defineBackground(() => {
   const store = new DraftStore();
   // Register the listener synchronously, but never admit a request before crash recovery.
-  const ready = store.recoverSubmissions();
-  // A failed database open must not become an unhandled rejection before the first message.
-  void ready.catch(() => undefined);
+  // The first valid request after a failed startup may retry initialization.
+  void store.recoverSubmissions().catch(() => undefined);
   let registrationSync = Promise.resolve();
   function syncRegistration() {
     registrationSync = registrationSync.catch(() => undefined).then(syncContentScripts);
@@ -61,15 +60,12 @@ export default defineBackground(() => {
         if (!await browser.permissions.contains({ origins: [`${source.origin}/*`] })) {
           throw new DraftStoreError('FORBIDDEN', t('The extension does not have access to this Azure DevOps origin.', 'De extensie heeft geen toegang tot deze Azure DevOps-oorsprong.'));
         }
-        await ready;
-        // Only these two journal mutations can use the store's exact document/attempt grant.
+        await store.recoverSubmissions();
+        // Only journal continuation reaches the store without a current-route match.
+        // The store checks the original scope, draft, attempt and browser document.
         if (continuing) return await execute();
         const route = parsePrRoute((await browser.tabs.get(sender.tab.id)).url ?? '');
-        if (!route || route.origin !== scope.route.origin ||
-            route.organization.toLowerCase() !== scope.route.organization.toLowerCase() ||
-            route.project.toLowerCase() !== scope.route.project.toLowerCase() ||
-            route.repository.toLowerCase() !== scope.route.repository.toLowerCase() ||
-            route.pullRequestId !== scope.route.pullRequestId) {
+        if (!route || !samePrRoute(route, scope.route)) {
           throw new DraftStoreError('FORBIDDEN', t('Draft scope does not match the sender’s PR route.', 'De draftcontext komt niet overeen met de PR-route van de afzender.'));
         }
         return await execute();
