@@ -1,6 +1,6 @@
 {
   "name": "threadhold",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Local draft comments in the native Azure DevOps PR editor",
   "type": "module",

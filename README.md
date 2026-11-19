@@ -83,7 +83,7 @@ Publishing is not guaranteed exactly once. If a result cannot be verified, Threa
 
 ## Project status
 
-Threadhold **0.1.0** is a working unpacked Chrome/Edge extension, not a published store release. It extends the Azure DevOps page UI; Azure DevOps changes can require compatibility updates.
+Threadhold is distributed as an unpacked Chrome/Edge extension, not through a browser store. It extends the Azure DevOps page UI; Azure DevOps changes can require compatibility updates.
 
 The name comes from holding a review thread until you're ready to publish. Domain availability and trademark rights have not been verified.
 

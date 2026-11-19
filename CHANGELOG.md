@@ -2,18 +2,20 @@
 
 ## Unreleased
 
-- Tag-triggered GitHub Releases with a built Chrome/Edge extension ZIP, gated by version matching, type checking and unit tests.
+## 0.1.1
+
 - A separate read-only PR check builds the Chrome MV3 extension and runs the existing Playwright Chromium suite on all pull requests, including docs-only changes.
-- Download-first installation and manual update instructions; no Node.js required for release downloads.
 - Verify publication by exact Azure DevOps IDs, author, content and inline location. Keep unconfirmed drafts and their receipts for **Check publication**; an in-flight attempt can finish after a same-document PR switch or service-worker restart without retrying the POST.
-- Local design artifacts excluded from version control; installation documentation focuses on supported behavior and verification limits.
 - Recover from a failed PR integration or temporary local-storage startup error with **Retry**. Pending saves cannot affect a different account or editor session. Cancel reattaching a draft before saving the new location; switching PRs clears reattach mode. Legacy Visual Studio collections keep separate drafts.
-- Removed unused save-control API and unreachable publication branching; exact Monaco range capture no longer deduplicates all decorations.
 - Keep text typed during a draft save in the active editor; the next save updates the same draft. Native submit and cancel end the editor session without waiting for local storage.
-- Browser tests configure their language explicitly instead of deriving it from test titles.
 
 ## 0.1.0
 
+- Tag-triggered GitHub Releases with a built Chrome/Edge extension ZIP, gated by version matching, type checking and unit tests.
+- Download-first installation and manual update instructions; no Node.js required for release downloads.
+- Local design artifacts excluded from version control; installation documentation focuses on supported behavior and verification limits.
+- Removed unused save-control API and unreachable publication branching; exact Monaco range capture no longer deduplicates all decorations.
+- Browser tests configure their language explicitly instead of deriving it from test titles.
 - English product-facing README and documentation, with reusable SVG logo assets for light and dark backgrounds.
 - Symbol-only extension icons for the browser toolbar and extension manager in 16, 32, 48 and 128 px sizes.
 - Browser-only Chrome/Edge extension for local Azure DevOps PR drafts.
