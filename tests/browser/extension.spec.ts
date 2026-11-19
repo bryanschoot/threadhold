@@ -85,6 +85,7 @@ let directory: string;
 let writes: number;
 let failPublication: boolean;
 let published: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
+let originalThreadPresent: boolean;
 test.use({ locale: 'nl-NL' });
 
 test.beforeEach(async ({ locale }) => {
@@ -113,6 +114,7 @@ test.beforeEach(async ({ locale }) => {
   await popup.getByRole('button', { name: english ? 'Grant access' : 'Toegang geven' }).click();
   await expect(popup.locator('#status')).toContainText(english ? 'Access is active' : 'Toegang actief');
   writes = 0; published = []; failPublication = false;
+  originalThreadPresent = true;
   await context.route('https://dev.azure.com/**', async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -140,7 +142,7 @@ test.beforeEach(async ({ locale }) => {
     }
     if (pathname.includes('/_apis/')) {
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
-        : pathname.endsWith('/threads') ? { value: [{ id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] }, ...published] }
+        : pathname.endsWith('/threads') ? { value: [...(originalThreadPresent ? [{ id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] }] : []), ...published] }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
         : /\/pullRequests\/\d+$/i.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
@@ -415,6 +417,133 @@ test('native draft editing saves locally with Ctrl+Enter and cancel keeps the sa
   expect(writes).toBe(0);
 });
 
+test('typing during draft creation preserves newer text and Ctrl+Enter updates the same draft', async () => {
+  const thread = page.locator('[data-existing-thread]');
+  await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+  const editor = thread.locator('textarea');
+  const create = thread.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  await editor.fill('Snapshot voor opslag');
+  await duringDraftWrite(() => create.click(), () => editor.fill('Nieuwere replytekst'));
+
+  const card = thread.locator('[data-threadhold-card]');
+  const save = thread.getByRole('button', { name: 'Opslaan', exact: true });
+  await expect(save).toBeEnabled();
+  await expect(editor).toHaveValue('Nieuwere replytekst');
+  await expect(page.locator('.page-content > [data-threadhold-status]')).toContainText('De editor bevat nog niet-opgeslagen tekst.');
+  await expect(thread.locator('.th-save [data-threadhold-status]')).toHaveText('De editor bevat nog niet-opgeslagen tekst. Sla opnieuw op om die te bewaren.');
+  await expect(card.locator('.th-body')).toHaveText('Snapshot voor opslag');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '1');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await expect(save).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(save).toHaveAttribute('data-threadhold-revision', '1');
+  await expect(thread.locator('button').filter({ hasText: /^Reply(?: & resolve)?$/ })).toHaveCount(2);
+  await expect(thread.locator('button').filter({ hasText: /^Reply$/ })).toBeHidden();
+  await expect(thread.locator('button').filter({ hasText: /^Reply & resolve$/ })).toBeHidden();
+
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveValue('');
+  await expect(card).toBeVisible();
+  await expect(card.locator('.th-body')).toHaveText('Nieuwere replytekst');
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(page.locator('[data-threadhold-card]')).toHaveCount(1);
+  expect(writes).toBe(0);
+});
+
+for (const replace of [false, true]) {
+test(`draft completion cannot close a ${replace ? 'replacement' : 'cancelled and reopened'} editor`, async () => {
+  if (replace) {
+    await page.goto(`${url}?collapsed-general=1`);
+    await page.getByRole('textbox', { name: 'Add a comment...', exact: true }).click();
+  }
+  const editor = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  const create = page.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const inlineStatus = page.locator('.repos-comment-editor-fit .th-save [data-threadhold-status]');
+  const pageStatus = page.locator('.page-content > [data-threadhold-status]');
+  const text = 'Same text in a different editor session';
+  await editor.fill(text);
+  await duringDraftWrite(() => create.click(), async () => {
+    if (replace) {
+      await editor.evaluate(node => node.replaceWith(node.cloneNode(true)));
+    } else {
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    await editor.fill(text);
+    await expect(create).toBeEnabled();
+  });
+
+  const card = page.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText(text);
+  await expect(card).toBeVisible();
+  await expect(editor).toHaveValue(text);
+  await expect(create).toBeEnabled();
+  await expect(create).not.toHaveAttribute('data-threadhold-draft-id', /.+/);
+  await expect(inlineStatus).toBeEmpty();
+  await expect(pageStatus).toHaveCount(0);
+  expect(writes).toBe(0);
+});
+}
+
+for (const trigger of ['Comment', 'Ctrl+Enter', 'Reply & resolve'] as const) {
+test(`native submission with ${trigger} ends the pending local save session`, async () => {
+  const reply = trigger === 'Reply & resolve';
+  const scope = reply ? page.locator('[data-existing-thread]') : page.locator('.page-content');
+  if (reply) await scope.getByRole('textbox', { name: 'Reply to original comment' }).click();
+  const editor = scope.getByRole('textbox', { name: reply ? 'Reply to original comment' : 'Add a comment', exact: true });
+  const create = scope.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const inlineStatus = scope.locator('.repos-comment-editor-fit .th-save [data-threadhold-status]');
+  const text = 'Same text in a new native session';
+  await editor.fill(text);
+  await duringDraftWrite(() => create.click(), async () => {
+    if (trigger === 'Ctrl+Enter') await editor.press('Control+Enter');
+    else await scope.getByRole('button', { name: trigger, exact: true }).click();
+    await expect(editor).toHaveValue('');
+    await expect(create).toBeEnabled();
+    await expect(inlineStatus).toBeEmpty();
+    await editor.fill(text);
+  });
+
+  expect(published.map(thread => thread.comments[0]?.content)).toEqual([text]);
+  const card = page.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText(text);
+  await expect(card).toBeVisible();
+  await expect(editor).toHaveValue(text);
+  await expect(create).toBeEnabled();
+  await expect(create).not.toHaveAttribute('data-threadhold-draft-id', /.+/);
+  await expect(inlineStatus).toBeEmpty();
+  await expect(page.locator('.page-content > [data-threadhold-status]')).toHaveCount(0);
+});
+}
+
+test('PR switch clears pending reattach instead of carrying it back to the original PR', async () => {
+  const thread = page.locator('[data-existing-thread]');
+  await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+  await thread.locator('textarea').fill('Original PR reply draft');
+  await thread.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+  const card = page.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText('Original PR reply draft');
+  originalThreadPresent = false;
+  await page.reload();
+  await card.getByRole('button', { name: 'Opnieuw koppelen', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Draft hier koppelen', exact: true })).toBeVisible();
+
+  const nextPr = url.replace(/42$/, '43');
+  await page.evaluate(next => history.pushState(null, '', next), nextPr);
+  await expect(card).toHaveCount(0);
+  const create = page.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  await expect(create).toBeVisible();
+  // The same-document IPC scope fix for writing from PR 43 is covered by PR #5.
+  // Return without a reload to verify the pending selection itself was discarded.
+  await page.evaluate(previous => history.pushState(null, '', previous), url);
+  const original = card.filter({ hasText: 'Original PR reply draft' });
+  await expect(original.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('Independent general draft');
+  await create.click();
+  await expect(card.filter({ hasText: 'Independent general draft' }).locator('.th-body')).toHaveText('Independent general draft');
+  await expect(original.locator('.th-body')).toHaveText('Original PR reply draft');
+  expect(writes).toBe(0);
+});
+
 test('reply draft follows the native thread after expansion and reload without DOM thread IDs', async () => {
   const thread = page.locator('[data-existing-thread]');
   await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
@@ -541,6 +670,43 @@ test('English browser gets English draft actions and native editing', async () =
   await card.getByRole('button', { name: 'Delete draft', exact: true }).click();
   await card.getByRole('button', { name: 'Yes, delete draft', exact: true }).click();
   await expect(card).toHaveCount(0);
+  expect(writes).toBe(0);
+});
+
+test('typing during a draft update preserves exact text and advances the binding', async () => {
+  const editor = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  await editor.fill('Original local draft');
+  await page.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = page.locator('[data-threadhold-card]');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  const save = page.getByRole('button', { name: 'Save', exact: true });
+  await expect(editor).toHaveValue('Original local draft');
+  await expect(save).toBeEnabled();
+  const snapshot = 'Updated local draft';
+  const newer = `${snapshot} `;
+  await editor.fill(snapshot);
+  await duringDraftWrite(() => editor.press('Control+Enter'), () => editor.fill(newer));
+
+  await expect(save).toBeEnabled();
+  await expect(editor).toHaveValue(newer);
+  await expect(page.locator('.page-content > [data-threadhold-status]')).toContainText('The editor still contains unsaved text.');
+  await expect(card.locator('.th-body')).toHaveText(snapshot);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(save).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(save).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(page.locator('#__bolt-comment-1')).toBeHidden();
+
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveValue('');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('data-threadhold-revision', '3');
+  await page.reload();
+  await expect(card).toHaveCount(1);
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '3');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue(newer);
   expect(writes).toBe(0);
 });
 });

@@ -302,17 +302,30 @@ export default defineContentScript({
         await refresh();
       }
     }
+    function endEditorSession(state: EditorState) {
+      state.requestId = undefined;
+      state.controls.reset();
+    }
+    function startEditing(state: EditorState, draft: Draft) {
+      state.draft = draft; state.controls.setBinding(draft);
+      state.editing = true; state.controls.setEditing(true);
+      state.editor.root.classList.add('th-draft-editing');
+      state.editor.publish.classList.add('th-native-publish-hidden');
+      state.editor.secondaryPublish?.classList.add('th-native-publish-hidden');
+      const card = cards.get(draft.id);
+      if (card) card.hidden = true;
+    }
     function finishEditing(state: EditorState, collapse: boolean) {
+      endEditorSession(state);
       state.editing = false;
       state.editor.root.classList.remove('th-draft-editing');
       state.draft = undefined;
-      state.requestId = crypto.randomUUID();
       state.controls.setEditing(false);
       if (!collapse) state.controls.resetSave();
       state.controls.setBinding();
       state.editor.publish.classList.remove('th-native-publish-hidden');
       state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
-      if (collapse) state.editor.cancel?.click();
+      if (collapse) readNativeEditorActions(state.editor.root)?.cancel?.click();
     }
     function isReattaching(selection: Reattach): boolean {
       return reanchor === selection && onScope(selection.generation, selection.scope);
@@ -418,27 +431,45 @@ export default defineContentScript({
           show(t(`Draft saved locally · revision ${result.draft.revision}.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}.`));
           await refresh();
         });
-        const state: EditorState = { editor, controls, requestId: crypto.randomUUID(), editing: false, dispose() {
+        const state: EditorState = { editor, controls, editing: false, dispose() {
           editor.root.removeEventListener('click', onClick, true); editor.root.removeEventListener('keydown', onKey, true);
+          endEditorSession(state);
           state.editor.root.classList.remove('th-draft-editing');
           state.editor.publish.classList.remove('th-native-publish-hidden'); state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
           controls.resetSave();
           controls.element.remove();
         } };
+        function onNativeEnd() {
+          const wasEditing = state.editing;
+          if (state.draft) finishEditing(state, false);
+          else endEditorSession(state);
+          if (wasEditing) render();
+        }
         function onClick(event: MouseEvent) {
           if (!(event.target instanceof Element)) return;
           const button = event.target.closest('button');
-          if (button === state.editor.cancel && state.editing) {
-            finishEditing(state, false);
-            render();
+          if (!button || button.closest('.th-save')) return;
+          const active = state.editor;
+          const actions = button === active.publish || button === active.secondaryPublish || button === active.cancel
+            ? active : readNativeEditorActions(active.root);
+          if (button === actions?.cancel) {
+            onNativeEnd();
             return;
           }
-          if (!state.editing || (button !== state.editor.publish && button !== state.editor.secondaryPublish)) return;
+          if (button !== actions?.publish && button !== actions?.secondaryPublish) return;
+          if (!state.editing) {
+            onNativeEnd();
+            return;
+          }
           event.preventDefault(); event.stopImmediatePropagation();
           controls.button.click();
         }
         function onKey(event: KeyboardEvent) {
-          if (!state.editing || event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
+          if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
+          if (!state.editing) {
+            if (event.target === state.editor.textarea) onNativeEnd();
+            return;
+          }
           event.preventDefault(); event.stopImmediatePropagation();
           controls.button.click();
         }

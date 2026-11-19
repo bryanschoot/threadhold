@@ -378,7 +378,7 @@ export interface SaveControl {
   setReattach(action?: () => Promise<void>): void;
   report(message: string, error?: boolean): void;
 }
-export function createSaveControl(onSave: () => void | Promise<void>): SaveControl {
+export function createSaveControl(onSave: (isCurrent: () => boolean) => Promise<void>): SaveControl {
   const container = element('div', 'th-save');
   const button = actionButton(t('Save as draft', 'Opslaan als draft'), 'save');
   const status = liveStatus();
