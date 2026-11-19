@@ -87,6 +87,7 @@ let failPublication: boolean;
 let failVerification: boolean;
 let publicationResponseGate: Promise<void> | undefined;
 let remoteThreads: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
+let originalThreadPresent: boolean;
 test.use({ locale: 'nl-NL' });
 
 test.beforeEach(async ({ locale }) => {
@@ -116,6 +117,7 @@ test.beforeEach(async ({ locale }) => {
   await expect(popup.locator('#status')).toContainText(english ? 'Access is active' : 'Toegang actief');
   writes = 0; failPublication = false;
   failVerification = false; publicationResponseGate = undefined;
+  originalThreadPresent = true;
   const originalDiscussion = { id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] };
   remoteThreads = [originalDiscussion];
   await context.route('https://dev.azure.com/**', async route => {
@@ -143,6 +145,7 @@ test.beforeEach(async ({ locale }) => {
       const reply = pathname.endsWith('/threads/86671/comments');
       const comment = { id: reply ? originalDiscussion.comments.length + 1 : 1, content: body, publishedDate: new Date().toISOString(), author: { id: 'user-id', displayName: 'Reviewer' } };
       if (reply) {
+        if (!originalThreadPresent) { await route.fulfill({ status: 404 }); return; }
         originalDiscussion.comments.push(comment);
         await route.fulfill({ json: comment });
       } else {
@@ -153,16 +156,18 @@ test.beforeEach(async ({ locale }) => {
       return;
     }
     if (pathname.includes('/_apis/')) {
+      const visibleThreads = !pathname.includes('/pullRequests/42/') ? []
+        : originalThreadPresent ? remoteThreads : remoteThreads.filter(thread => thread !== originalDiscussion);
       const threadId = /\/threads\/(\d+)$/u.exec(pathname)?.[1];
       if (threadId) {
         if (failVerification) { await route.fulfill({ status: 503 }); return; }
-        const thread = remoteThreads.find(item => item.id === Number(threadId));
+        const thread = visibleThreads.find(item => item.id === Number(threadId));
         if (thread) await route.fulfill({ json: thread });
         else await route.fulfill({ status: 404 });
         return;
       }
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
-        : pathname.endsWith('/threads') ? { value: pathname.includes('/pullRequests/42/') ? remoteThreads : [] }
+        : pathname.endsWith('/threads') ? { value: visibleThreads }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
         : /\/pullRequests\/\d+$/u.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
@@ -357,7 +362,9 @@ test(`native submission with ${trigger} ends the pending local save session`, as
     await editor.fill(text);
   });
 
-  expect(published.map(thread => thread.comments[0]?.content)).toEqual([text]);
+  expect(remoteThreads.flatMap(thread => thread.comments
+    .filter(comment => thread.id !== 86671 || comment.id !== 1)
+    .map(comment => comment.content))).toEqual([text]);
   const card = page.locator('[data-threadhold-card]');
   await expect(card.locator('.th-body')).toHaveText(text);
   await expect(card).toBeVisible();
@@ -386,7 +393,6 @@ test('PR switch clears pending reattach instead of carrying it back to the origi
   await expect(card).toHaveCount(0);
   const create = page.getByRole('button', { name: 'Opslaan als draft', exact: true });
   await expect(create).toBeVisible();
-  // The same-document IPC scope fix for writing from PR 43 is covered by PR #5.
   // Return without a reload to verify the pending selection itself was discarded.
   await page.evaluate(previous => history.pushState(null, '', previous), url);
   const original = card.filter({ hasText: 'Original PR reply draft' });
