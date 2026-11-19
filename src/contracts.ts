@@ -31,6 +31,7 @@ export interface Anchor {
   editorKey: string;
   pageUrl: string;
 }
+export interface PublicationReceipt { threadId: number; commentId: number }
 export interface Draft {
   id: string;
   scope: Scope;
@@ -40,7 +41,7 @@ export interface Draft {
   state: DraftState;
   createdAt: string;
   updatedAt: string;
-  submission?: { body: string; startedAt: string; knownCommentIds: string[] };
+  submission?: { body: string; startedAt: string; receipt?: PublicationReceipt };
 }
 export type DraftRequest =
   | { action: 'list'; scope: Scope }
@@ -48,11 +49,16 @@ export type DraftRequest =
   | { action: 'create'; scope: Scope; anchor: Anchor; body: string; requestId: string }
   | { action: 'update'; scope: Scope; id: string; ifRevision: number; body: string; anchor?: Anchor }
   | { action: 'delete'; scope: Scope; id: string; ifRevision: number }
-  | { action: 'beginSubmit'; scope: Scope; id: string; ifRevision: number; body: string; knownCommentIds: string[] }
-  | { action: 'finishSubmit'; scope: Scope; id: string; ifRevision: number; outcome: 'published' | 'failed' | 'unknown'; remoteThreadId?: number; remoteCommentId?: number };
-export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: true };
+  | { action: 'beginSubmit'; scope: Scope; id: string; ifRevision: number; body: string }
+  | { action: 'recordSubmitReceipt'; scope: Scope; id: string; attempt: number; receipt: PublicationReceipt }
+  | { action: 'completeSubmit'; scope: Scope; id: string; attempt: number; verified?: PublicationReceipt }
+  | { action: 'finishSubmit'; scope: Scope; id: string; ifRevision: number; outcome: 'published' | 'failed'; remoteThreadId?: number; remoteCommentId?: number };
+export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: true } | { acknowledged: true };
 export type ExtensionRequest = { channel: 'threadhold'; request: DraftRequest };
 export type ExtensionResponse = { ok: true; result: DraftResult } | { ok: false; error: { code: string; message: string } };
+export function isPositiveId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
 export function scopeKey(scope: Scope): string {
   return JSON.stringify([scope.route.origin.toLowerCase(), scope.route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), scope.route.pullRequestId, scope.userId.toLowerCase()]);
 }
