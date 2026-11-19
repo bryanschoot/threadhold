@@ -59,7 +59,7 @@ The extension follows the browser's `navigator.language`. English is the default
 
 The instructions below use English extension labels.
 
-- Write in the **native editor** and choose **Save as draft**. The editor closes and the draft card appears only after durable local storage succeeds. The card renders Markdown locally with sanitization; the original Markdown remains the exact source for editing and publishing. DevOps mention references remain readable without external identity resolution.
+- Write in the **native editor** and choose **Save as draft**. The draft card appears only after durable local storage succeeds. The editor closes only if it is still in the same edit session and its text has not changed during the write. The card renders Markdown locally with sanitization; the original Markdown remains the exact source for editing and publishing. DevOps mention references remain readable without external identity resolution.
 - The **Edit** pencil opens the original native editor with the saved text, even when the general composer is collapsed. Other existing editor content is not overwritten. **Save** and Ctrl+Enter update the local draft; its ID stays the same and its revision increases.
 - **Cancel** discards only the unsaved edit. The last saved draft remains.
 - The **Delete draft** trash icon asks for confirmation and removes only the local draft.
@@ -74,7 +74,7 @@ General comments, replies and inline drafts use the existing Azure DevOps editor
 
 Azure DevOps does not provide a stable contract for this DOM extension. Unknown or ambiguous locations do not receive a guessed draft binding. A UI update may require adapter changes. Ordinary native publication without a draft binding remains unchanged.
 
-If Threadhold cannot load the PR integration, choose **Retry** in its message on that PR. This does not reload the page or change native editor text. Threadhold does not retry automatically.
+If Threadhold cannot load the PR integration or initialize local storage, choose **Retry** in its message on that PR. This does not reload the page or change native editor text. Threadhold does not retry PR requests automatically.
 
 ## Browser agents
 
@@ -95,7 +95,7 @@ Wait for the resulting card, higher revision or removal, not a fixed sleep or me
 
 ## Privacy and recovery
 
-- Drafts live in IndexedDB in the **extension origin**, separated by organization, project, repository, PR and stable user ID.
+- Drafts live in IndexedDB in the **extension origin**, separated by organization (and explicit collection for legacy Visual Studio URLs), project, repository, PR and stable user ID.
 - No PAT, external backend, telemetry or browser sync. Context is read through GET requests using the existing browser session. Only the explicitly confirmed publication action sends comment POST requests to the same Azure DevOps origin.
 - Threadhold does not encrypt the database. Scripts on the Azure DevOps page can read draft text displayed there. “Local only” does not mean “invisible to page code.”
 - Multi-tab updates use revision checks. A conflict does not overwrite another revision; the native editor retains the text.

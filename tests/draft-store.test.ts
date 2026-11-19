@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DraftStore } from '../src/draft-store';
 import type { Anchor, Draft, DraftRequest, Scope } from '../src/contracts';
+import { openDB } from 'idb';
+import { parsePrRoute } from '../src/routes';
 
 const scope: Scope = {
   route: {
@@ -25,7 +27,7 @@ async function draft(store: DraftStore, request: DraftRequest): Promise<Draft> {
   if (!('draft' in result)) throw new Error('Expected a draft result');
   return result.draft;
 }
-const create = (body = 'Saved text', requestId: string = crypto.randomUUID()): DraftRequest => ({ action: 'create', scope, anchor, body, requestId });
+const create = (body = 'Saved text', requestId: string = crypto.randomUUID()): Extract<DraftRequest, { action: 'create' }> => ({ action: 'create', scope, anchor, body, requestId });
 afterEach(async () => { await Promise.all(stores.splice(0).map(store => store.close())); });
 
 describe('durable draft CRUD', () => {
@@ -48,6 +50,49 @@ describe('durable draft CRUD', () => {
       expect(await store.execute({ action: 'list', scope: different })).toEqual({ drafts: [] });
       await expect(store.execute({ action: 'get', scope: different, id: saved.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     }
+  });
+
+  it('keeps legacy collections separate even when repository, user and PR IDs match', async () => {
+    const store = open();
+    const host = 'https://acme.visualstudio.com';
+    const route = parsePrRoute(`${host}/DefaultCollection/Platform/_git/app/pullrequest/42`)!;
+    const otherRoute = parsePrRoute(`${host}/OtherCollection/Platform/_git/app/pullrequest/42`)!;
+    const bareRoute = parsePrRoute(`${host}/Platform/_git/app/pullrequest/42`)!;
+    const own = { ...scope, route };
+    const command = { ...create(), scope: own, anchor: { ...anchor, pageUrl: route.prUrl } };
+    const saved = await draft(store, command);
+    for (const outside of [otherRoute, bareRoute]) {
+      const other = { ...scope, route: outside };
+      expect(await store.execute({ action: 'list', scope: other })).toEqual({ drafts: [] });
+      await expect(store.execute({ action: 'get', scope: other, id: saved.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(store.execute({ ...command, anchor: { ...anchor, pageUrl: outside.prUrl } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    await expect(store.execute({ ...command, scope: { ...own, route: { ...route, organizationUrl: otherRoute.organizationUrl } } })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  it('retains a legacy collection draft and its create receipt when opening a v1 database', async () => {
+    const name = crypto.randomUUID();
+    const route = parsePrRoute('https://acme.visualstudio.com/DefaultCollection/Platform/_git/app/pullrequest/42')!;
+    const own = { ...scope, route };
+    const location = { ...anchor, pageUrl: route.prUrl };
+    const command = { action: 'create' as const, scope: own, anchor: location, requestId: 'before-upgrade', body: 'Saved in the collection' };
+    const saved: Draft = { id: 'legacy-draft', scope: own, anchor: location, body: command.body, revision: 1, state: 'saved', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const oldKey = '["https://acme.visualstudio.com","acme","project-id","repository-id",42,"user-id"]';
+    const v1 = await openDB(name, 1, { upgrade(database) {
+      const drafts = database.createObjectStore('drafts', { keyPath: 'id' });
+      drafts.createIndex('by-scope', 'scopeKey');
+      drafts.createIndex('by-scope-updated', ['scopeKey', 'draft.updatedAt']);
+      database.createObjectStore('requests', { keyPath: ['scopeKey', 'requestId'] });
+    } });
+    await v1.put('drafts', { id: saved.id, scopeKey: oldKey, draft: saved });
+    await v1.put('requests', { scopeKey: oldKey, requestId: command.requestId, draftId: saved.id, fingerprint: 'different payload' });
+    v1.close();
+
+    const store = open(name);
+    expect(await store.execute({ action: 'list', scope: own })).toEqual({ drafts: [saved] });
+    const bareRoute = parsePrRoute('https://acme.visualstudio.com/Platform/_git/app/pullrequest/42')!;
+    expect(await store.execute({ action: 'list', scope: { ...scope, route: bareRoute } })).toEqual({ drafts: [] });
+    await expect(store.execute(command)).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
   it('atomically accepts only one concurrent compare-and-swap update', async () => {
@@ -152,6 +197,37 @@ describe('durable native submission journal', () => {
     await restarted.execute({ action: 'beginSubmit', scope, id: saved.id, ifRevision: failed.revision, body: 'Explicitly checked and retried', knownCommentIds: ['12:7'] });
     await restarted.recoverSubmissions();
     expect((await draft(restarted, { action: 'get', scope, id: saved.id })).state).toBe('sending');
+  });
+
+  it('renews a failed startup open, then leaves later live submissions untouched', async () => {
+    const name = crypto.randomUUID();
+    const original = open(name);
+    const saved = await draft(original, create());
+    const begin = { action: 'beginSubmit' as const, scope, id: saved.id, body: saved.body, knownCommentIds: [] };
+    await original.execute({ ...begin, ifRevision: saved.revision });
+    await original.close();
+
+    const incompatibleName = crypto.randomUUID();
+    (await openDB(incompatibleName, 100)).close();
+    const realOpen = indexedDB.open.bind(indexedDB);
+    const failOnce = vi.spyOn(indexedDB, 'open').mockImplementationOnce(() => realOpen(incompatibleName, 1));
+    try {
+      const restarted = open(name);
+      const startup = restarted.recoverSubmissions();
+      const concurrent = restarted.recoverSubmissions();
+      await expect(startup).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+      await expect(concurrent).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+
+      await restarted.recoverSubmissions();
+      const unknown = await draft(restarted, { action: 'get', scope, id: saved.id });
+      expect(unknown.state).toBe('unknown');
+      const ready = await draft(restarted, { action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'failed' });
+      const sending = await draft(restarted, { ...begin, ifRevision: ready.revision });
+      await restarted.recoverSubmissions();
+      expect(await restarted.execute({ action: 'list', scope })).toEqual({ drafts: [sending] });
+    } finally {
+      failOnce.mockRestore();
+    }
   });
 
   it('preserves unknown results and only removes drafts after confirmed positive remote IDs', async () => {

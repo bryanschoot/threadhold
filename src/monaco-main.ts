@@ -1,4 +1,4 @@
-import { parsePrRoute } from './routes';
+import { parsePrRoute, samePrRoute } from './routes';
 import { captureDiscussionRange, equalMonacoRange, validMonacoRange } from './monaco-range';
 import type { Anchor, Scope } from './contracts';
 import type { MonacoBinding, MonacoCommand, MonacoContext, MonacoDisposable, MonacoEditor, MonacoModel, MonacoNamespace, MonacoOverlayWidget, MonacoRange, MonacoViewZone } from './monaco-types';
@@ -128,8 +128,7 @@ export function installMonacoController(): void {
   }
   function guard(scope: Scope) {
     const route = parsePrRoute(location.href);
-    if (!route || route.origin !== scope.route.origin || route.organization.toLowerCase() !== scope.route.organization.toLowerCase() ||
-        route.project.toLowerCase() !== scope.route.project.toLowerCase() || route.repository.toLowerCase() !== scope.route.repository.toLowerCase() || route.pullRequestId !== scope.route.pullRequestId) {
+    if (!route || !samePrRoute(route, scope.route)) {
       clear(); throw new Error(t('The native editor does not belong to this PR.', 'De native editor hoort niet bij deze PR.'));
     }
     const key = JSON.stringify([route.prUrl, scope.repositoryId, scope.userId]);

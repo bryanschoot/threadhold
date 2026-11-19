@@ -54,5 +54,9 @@ export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: tr
 export type ExtensionRequest = { channel: 'threadhold'; request: DraftRequest };
 export type ExtensionResponse = { ok: true; result: DraftResult } | { ok: false; error: { code: string; message: string } };
 export function scopeKey(scope: Scope): string {
-  return JSON.stringify([scope.route.origin.toLowerCase(), scope.route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), scope.route.pullRequestId, scope.userId.toLowerCase()]);
+  const { route } = scope;
+  const key = [route.origin.toLowerCase(), route.organization.toLowerCase(), scope.projectId.toLowerCase(), scope.repositoryId.toLowerCase(), route.pullRequestId, scope.userId.toLowerCase()];
+  // Keep the existing keys for modern and collection-less URLs.
+  if (route.origin.endsWith('.visualstudio.com') && route.organizationUrl !== route.origin) key.push(route.organizationUrl.toLowerCase());
+  return JSON.stringify(key);
 }

@@ -1,4 +1,4 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -167,21 +167,22 @@ test.describe('PR context lifecycle', () => {
   }
 
   async function holdThreads(pr: number, failure?: number) {
-    const arrived = Promise.withResolvers<void>();
+    const arrived = Promise.withResolvers<Request>();
     const release = Promise.withResolvers<void>();
     await page.route(threadGet(pr), async route => {
-      arrived.resolve();
+      arrived.resolve(route.request());
       await release.promise;
-      if (failure) await route.fulfill({ status: failure, json: {} });
-      else await route.fallback();
+      await route.fulfill(failure ? { status: failure, json: {} } : { json: { value: [] } });
     }, { times: 1 });
     return {
       arrived: arrived.promise,
       release: release.resolve,
       async finish() {
-        const response = page.waitForResponse(threadGet(pr));
+        const request = await arrived.promise;
         release.resolve();
-        expect(await (await response).finished()).toBeNull();
+        const response = await request.response();
+        expect(response).not.toBeNull();
+        expect(await response!.finished()).toBeNull();
       },
     };
   }
@@ -297,6 +298,66 @@ test.describe('PR context lifecycle', () => {
       await expect(stored.locator('.th-body')).toHaveText(replyBody);
       await expect(stored).toHaveAttribute('data-threadhold-revision', '1');
       await expect(stored.getByRole('button', { name: 'Opnieuw koppelen', exact: true })).toBeVisible();
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('a pending save cannot read or clear text from the next editor session', async () => {
+    const card = page.locator('[data-threadhold-card]');
+    await editor().fill('Original draft');
+    await save().click();
+    await expect(card.locator('.th-body')).toHaveText('Original draft');
+    await card.getByRole('button', { name: 'Bewerken', exact: true }).click();
+    const editSave = page.getByRole('button', { name: 'Opslaan', exact: true });
+    await expect(editSave).toBeEnabled();
+    await editor().fill('Cancelled edit');
+    const pending = await holdThreads(42);
+    try {
+      await editSave.click();
+      await pending.arrived;
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await editor().fill('Text in the next session');
+      await pending.finish();
+      await expect(save()).toBeEnabled();
+      await expect(editor()).toHaveValue('Text in the next session');
+
+      await save().click();
+      await expect(card.locator('.th-body')).toHaveText(['Original draft', 'Text in the next session']);
+      await expect(card.filter({ hasText: 'Original draft' })).toHaveAttribute('data-threadhold-revision', '1');
+      expect(writes).toBe(0);
+    } finally {
+      pending.release();
+    }
+  });
+
+  test('a save awaiting validation cannot write or clear the next account’s editor', async () => {
+    let userId = 'user-id';
+    await page.route(url => url.pathname.endsWith('/connectionData'), route => route.fulfill({
+      json: { authenticatedUser: { id: userId, providerDisplayName: 'Reviewer' } },
+    }));
+    const switchAccount = async (id: string) => {
+      userId = id;
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await retry().click();
+      await expect(save()).toBeEnabled();
+    };
+    const cards = page.locator('[data-threadhold-card] .th-body');
+    await editor().fill('Pending text in account A');
+    const pending = await holdThreads(42);
+    try {
+      await save().click();
+      await pending.arrived;
+      await switchAccount('other-user');
+      await editor().fill('New text in account B');
+      await pending.finish();
+      await expect(editor()).toHaveValue('New text in account B');
+      await save().click();
+      await expect(cards).toHaveText('New text in account B');
+
+      await switchAccount('user-id');
+      await expect(cards).toHaveCount(0);
       expect(writes).toBe(0);
     } finally {
       pending.release();

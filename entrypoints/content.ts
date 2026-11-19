@@ -39,6 +39,9 @@ export default defineContentScript({
     function onRoute(version: number): boolean {
       return !disposed && version === generation && routeKey === location.origin + location.pathname;
     }
+    function onScope(version: number, scope: string): boolean {
+      return onRoute(version) && !!context && scopeKey(context.scope) === scope;
+    }
     function mountActionNotices() {
       if (!routeNotice && !reanchor) return;
       const page = document.querySelector('.repos-pr-details-page');
@@ -122,16 +125,29 @@ export default defineContentScript({
     }
     const actions: DraftUiActions = {
       async edit(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
-        threads = await readThreads(fresh);
-        if (draft.state !== 'saved' || isStale(draft, fresh, threads)) throw new Error(t('This draft cannot be safely attached to its original location.', 'Deze draft kan niet veilig aan de oorspronkelijke locatie worden gekoppeld.'));
-        const editor = await openDraftEditor(draft, fresh, threads);
-        if (editor.textarea.closest('.monaco-editor')) monacoBindings = await readMonacoBindings(fresh);
+        if (!onScope(version, scope)) return;
+        const loadedThreads = await readThreads(fresh);
+        if (!onScope(version, scope)) return;
+        if (draft.state !== 'saved' || isStale(draft, fresh, loadedThreads)) throw new Error(t('This draft cannot be safely attached to its original location.', 'Deze draft kan niet veilig aan de oorspronkelijke locatie worden gekoppeld.'));
+        const editor = await openDraftEditor(draft, fresh, loadedThreads);
+        if (!onScope(version, scope)) return;
+        if (editor.textarea.closest('.monaco-editor')) {
+          const bindings = await readMonacoBindings(fresh);
+          if (!onScope(version, scope)) return;
+          monacoBindings = bindings;
+        }
+        threads = loadedThreads;
         const text = readEditor(editor);
         if (text.trim() && text !== draft.body) throw new Error(t('The native editor contains different text. Save or remove that text yourself first.', 'De native editor bevat andere tekst. Bewaar of verwijder die tekst eerst zelf.'));
         mountEditors();
         const state = editors.get(editor.textarea);
         if (!state) throw new Error(t('This native editor is not recognized.', 'Deze native editor wordt niet herkend.'));
+        state.requestId = crypto.randomUUID();
+        state.controls.resetSave();
         state.draft = draft; state.controls.setBinding(draft);
         state.editing = true; state.controls.setEditing(true);
         editor.root.classList.add('th-draft-editing');
@@ -292,13 +308,14 @@ export default defineContentScript({
       state.draft = undefined;
       state.requestId = crypto.randomUUID();
       state.controls.setEditing(false);
+      if (!collapse) state.controls.resetSave();
       state.controls.setBinding();
       state.editor.publish.classList.remove('th-native-publish-hidden');
       state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
       if (collapse) state.editor.cancel?.click();
     }
     function isReattaching(selection: Reattach): boolean {
-      return reanchor === selection && onRoute(selection.generation) && !!context && scopeKey(context.scope) === selection.scope;
+      return reanchor === selection && onScope(selection.generation, selection.scope);
     }
     function bindReattach(state: EditorState) {
       const selection = reanchor;
@@ -314,15 +331,20 @@ export default defineContentScript({
       if (editor.anchor.kind === 'inline' && (editor.anchor.sourceCommit !== fresh.sourceCommit || editor.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
       if (editor.anchor.kind === 'reply' && !activeThreads.some(thread => thread.id === editor.anchor.threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
     }
+    function isEditorSession(state: EditorState, requestId: string): boolean {
+      const { textarea } = state.editor;
+      return state.requestId === requestId && textarea.isConnected && editors.get(textarea) === state;
+    }
     async function confirmReattach(selection: Reattach, state: EditorState) {
       if (!isReattaching(selection)) return;
       const editor = state.editor;
+      const session = state.requestId;
       const fresh = await current();
-      if (!isReattaching(selection) || scopeKey(fresh.scope) !== selection.scope) return;
+      if (!isReattaching(selection) || !isEditorSession(state, session) || scopeKey(fresh.scope) !== selection.scope) return;
       const loadedThreads = await readThreads(fresh);
       if (!isReattaching(selection)) return;
       if (selection.committing) throw new Error(t('A new draft location is already being saved.', 'Er wordt al een nieuwe draftlocatie opgeslagen.'));
-      if (!editor.textarea.isConnected || editors.get(editor.textarea) !== state) throw new Error(t('The editor is no longer available.', 'De editor is niet meer beschikbaar.'));
+      if (!isEditorSession(state, session)) return;
       validateAnchor(editor, fresh, loadedThreads);
       const { draft } = selection;
       const text = readEditor(editor);
@@ -337,7 +359,7 @@ export default defineContentScript({
         if (!('draft' in result)) throw new Error(t('No durable storage confirmation.', 'Geen duurzame opslagbevestiging.'));
         threads = loadedThreads;
         setReattach();
-        if (editor.textarea.isConnected && editors.get(editor.textarea) === state) {
+        if (isEditorSession(state, session)) {
           state.draft = result.draft;
           state.controls.setBinding(result.draft);
           // The user may have typed while the storage write was pending.
@@ -357,7 +379,7 @@ export default defineContentScript({
       for (const [element, state] of editors) if (!element.isConnected) { state.dispose(); editors.delete(element); }
       for (const editor of discoverEditors(context, threads, monacoBindings)) {
         const existing = editors.get(editor.textarea);
-        if (existing && sameEditor(existing.editor.anchor, editor.anchor)) {
+        if (existing && existing.editor.root === editor.root && sameEditor(existing.editor.anchor, editor.anchor)) {
           existing.editor = editor;
           if (existing.controls.element.parentElement !== editor.actions) editor.actions.prepend(existing.controls.element);
           if (existing.editing) {
@@ -368,26 +390,39 @@ export default defineContentScript({
         }
         if (existing) { existing.dispose(); editors.delete(editor.textarea); }
         const controls = createSaveControl(async () => {
+          if (!context) return;
+          const version = generation;
+          const scope = scopeKey(context.scope);
+          const session = state.requestId;
+          const bound = state.draft;
+          const stillSaving = () => onScope(version, scope) && isEditorSession(state, session);
+          if (!stillSaving() || (bound && scopeKey(bound.scope) !== scope)) return;
           const fresh = await current();
-          threads = await readThreads(fresh);
-          validateAnchor(editor, fresh, threads);
-          if (state.draft && isStale(state.draft, fresh, threads)) throw new Error(t('Location is outdated. Draft text is retained; explicitly choose a new native location.', 'Locatie verouderd. Drafttekst blijft bewaard; kies expliciet een nieuwe native locatie.'));
-          if (!editor.textarea.isConnected) throw new Error(t('The editor is no longer available.', 'De editor is niet meer beschikbaar.'));
-          const body = readEditor(editor);
-          const result = state.draft
-            ? await request({ action: 'update', scope: fresh.scope, id: state.draft.id, ifRevision: state.draft.revision, body })
-            : await request({ action: 'create', scope: fresh.scope, anchor: { ...editor.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId: state.requestId });
+          if (!stillSaving() || scopeKey(fresh.scope) !== scope) return;
+          const loadedThreads = await readThreads(fresh);
+          if (!stillSaving()) return;
+          const target = state.editor;
+          validateAnchor(target, fresh, loadedThreads);
+          if (bound && isStale(bound, fresh, loadedThreads)) throw new Error(t('Location is outdated. Draft text is retained; explicitly choose a new native location.', 'Locatie verouderd. Drafttekst blijft bewaard; kies expliciet een nieuwe native locatie.'));
+          const body = readEditor(target);
+          const result = bound
+            ? await request({ action: 'update', scope: fresh.scope, id: bound.id, ifRevision: bound.revision, body })
+            : await request({ action: 'create', scope: fresh.scope, anchor: { ...target.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId: session });
+          if (!stillSaving()) return;
           if (!('draft' in result)) throw new Error(t('No durable storage confirmation received.', 'Geen duurzame opslagbevestiging ontvangen.'));
-          state.draft = result.draft; controls.setBinding(result.draft);
+          threads = loadedThreads;
+          state.draft = result.draft;
+          controls.setBinding(result.draft);
           controls.report(t('Saved', 'Opgeslagen'));
-          finishEditing(state, true);
-          await refresh();
+          if (readEditor(state.editor) === body) finishEditing(state, true);
           show(t(`Draft saved locally · revision ${result.draft.revision}.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}.`));
+          await refresh();
         });
         const state: EditorState = { editor, controls, requestId: crypto.randomUUID(), editing: false, dispose() {
           editor.root.removeEventListener('click', onClick, true); editor.root.removeEventListener('keydown', onKey, true);
           state.editor.root.classList.remove('th-draft-editing');
           state.editor.publish.classList.remove('th-native-publish-hidden'); state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
+          controls.resetSave();
           controls.element.remove();
         } };
         function onClick(event: MouseEvent) {

@@ -374,6 +374,7 @@ export interface SaveControl {
   button: HTMLButtonElement;
   setBinding(draft?: Draft): void;
   setEditing(editing: boolean): void;
+  resetSave(): void;
   setReattach(action?: () => Promise<void>): void;
   report(message: string, error?: boolean): void;
 }
@@ -406,7 +407,7 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
     void (async () => {
       try {
         await operation.action();
-        if (pending === operation && status.textContent === waiting) report(status, reattach ? '' : t('Saved', 'Opgeslagen'));
+        if (pending === operation && status.textContent === waiting) report(status, '');
       } catch (error) {
         if (pending === operation) report(status, errorMessage(error), true);
       } finally {
@@ -430,6 +431,14 @@ export function createSaveControl(onSave: () => void | Promise<void>): SaveContr
     },
     setEditing(value) {
       editing = value;
+      update();
+    },
+    resetSave() {
+      if (pending?.action === onSave) pending = undefined;
+      if (!pending) {
+        status.title = '';
+        report(status, '');
+      }
       update();
     },
     setReattach(action) {
