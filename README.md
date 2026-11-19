@@ -98,3 +98,18 @@ The name comes from holding a review thread until you're ready to publish. Domai
 Built with TypeScript and WXT. Use `npm run dev` for development, `npm run typecheck` for type checking, `npm test` for unit tests, and `npm run test:browser` for the isolated browser suite. `npm run zip` creates an unpacked distribution archive; it is not a signed store package.
 
 Releases are built by GitHub Actions when a `v<version>` tag is pushed. The tag must match `package.json`; type checking and unit tests must pass before the extension ZIP is published. See [release and update instructions](docs/installation.md#releasing).
+
+### Browser tests
+
+The read-only **PR browser tests** workflow runs the **Browser tests** check on pull requests without path filters, including docs-only changes.
+
+To reproduce the job locally on Ubuntu with Node.js 22 (22.12 or newer), run:
+
+```sh
+npm ci
+npm run build -- --browser chrome --mv3
+npx playwright install --with-deps --no-shell chromium
+npm run test:browser
+```
+
+On Windows, omit `--with-deps`; it installs Linux system packages for the CI runner. The suite loads `.output/chrome-mv3` in Playwright's bundled Chromium using a persistent headless context; it does not use a system Chrome install.
