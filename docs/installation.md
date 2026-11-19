@@ -66,7 +66,8 @@ The instructions below use English extension labels.
 - There is no draft tab or navigation index. Drafts appear alongside ordinary comments. An unmounted or outdated location gets a recovery card among the Overview comments.
 - If a draft location is outdated, choose **Reattach** on its card, open the intended native comment editor and choose **Reattach draft here**. There is no automatic line remapping. **Cancel reattach** restores the normal draft buttons and leaves the saved draft and editor text unchanged. Switching PRs also clears reattach mode.
 - **Publish drafts (n)** beside **Approve**, or beside the native **Publish** action on a draft PR, asks for confirmation and then publishes the saved drafts one at a time. This does not approve the PR, publish the draft PR itself or resolve threads.
-- If a publication result cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** makes GET requests only. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic retry.
+- Threadhold keeps the draft until a GET in the original PR confirms the receipt's exact thread and comment IDs, author and content. Replies must be in their original discussion; inline comments must match the original file, side and range. Matching text alone never confirms publication.
+- If publication cannot be verified, the draft is retained as unknown and the batch stops. **Check publication** makes no remote writes and can verify a saved receipt after reload. Without a valid receipt, including for older pending drafts, inspect Azure DevOps manually. **Edit again** requires explicit acknowledgment that publication may be duplicated. There is no automatic POST retry.
 
 ## Native views and compatibility
 
@@ -99,14 +100,15 @@ Wait for the resulting card, higher revision or removal, not a fixed sleep or me
 - No PAT, external backend, telemetry or browser sync. Context is read through GET requests using the existing browser session. Only the explicitly confirmed publication action sends comment POST requests to the same Azure DevOps origin.
 - Threadhold does not encrypt the database. Scripts on the Azure DevOps page can read draft text displayed there. “Local only” does not mean “invisible to page code.”
 - Multi-tab updates use revision checks. A conflict does not overwrite another revision; the native editor retains the text.
-- Interrupted publication becomes unknown when the service worker restarts. There is no automatic retry or exactly-once guarantee.
+- Switching PRs in the same browser document stops the batch from starting another POST. That document can still record and verify the original attempt; ordinary draft actions remain scoped to the current PR.
+- On service-worker restart, interrupted publication becomes unknown. A receipt already stored is retained, and the original browser document can still supply a late receipt for that exact attempt. Closing or reloading the document before it can save the receipt can leave the result unknown. There is no exactly-once guarantee.
 - Removing the extension or losing the browser profile can irreversibly erase drafts. There is no cloud backup.
 
 ## Verification boundaries
 
 - Unit tests cover storage isolation, revisions, publication reconciliation, routes and exact selection ranges.
 - Browser tests load the real unpacked extension in temporary profiles with an isolated test backend. They cover local CRUD, reloads, native editing, English/Dutch controls, Markdown sanitization, inline/split selections and narrow panels.
-- Fixture publication checks verify request payloads without posting real Azure DevOps comments. They do not prove compatibility with every live Azure DevOps DOM or stylesheet.
+- Fixture publication checks cover request payloads, same-document PR switches and recovery after an unconfirmed GET without posting real Azure DevOps comments. They do not prove compatibility with every live Azure DevOps DOM or stylesheet.
 - Live server publication, full DevOps mention-name resolution and store installation are not claimed as verified. Azure DevOps UI changes can require adapter updates.
 
 ## Releasing

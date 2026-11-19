@@ -38,6 +38,7 @@ export default defineBackground(() => {
         }
         let scope: Scope;
         let execute: () => Promise<ExtensionResponse | MonacoResponse>;
+        let continuing = false;
         if (message.channel === 'threadhold-monaco') {
           const request = validateMonacoRequest(message.request);
           scope = request.action === 'open' ? request.scope : request.context.scope;
@@ -46,7 +47,8 @@ export default defineBackground(() => {
           validateDraftRequest(message.request);
           const request = message.request;
           scope = request.scope;
-          execute = async () => ({ ok: true, result: await store.execute(request) });
+          continuing = request.action === 'recordSubmitReceipt' || request.action === 'completeSubmit';
+          execute = async () => ({ ok: true, result: await store.execute(request, sender.documentId) });
         }
         // The sender URL can still be the document's original URL after history.pushState.
         // Check its origin, then validate the exact PR against the tab's committed URL.

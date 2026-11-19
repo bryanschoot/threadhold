@@ -23,7 +23,7 @@ function text(value: unknown, name: string, max = 4096): asserts value is string
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) invalid(`${name} must be nonempty bounded text without control characters.`);
 }
 function positive(value: unknown, name: string): asserts value is number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) invalid(`${name} must be a positive safe integer.`);
+  if (!isPositiveId(value)) invalid(`${name} must be a positive safe integer.`);
 }
 function body(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.includes('\0') || value.length > MAX_BODY_BYTES || encoder.encode(value).byteLength > MAX_BODY_BYTES) invalid(t('Body must contain text and be at most 1 MiB in UTF-8.', 'De inhoud moet tekst bevatten en mag maximaal 1 MiB groot zijn in UTF-8.'));
@@ -84,33 +84,41 @@ export function validateDraftRequest(value: unknown): asserts value is DraftRequ
     case 'create': fields = ['anchor', 'body', 'requestId']; break;
     case 'update': fields = ['id', 'ifRevision', 'body', 'anchor']; break;
     case 'delete': fields = ['id', 'ifRevision']; break;
-    case 'beginSubmit': fields = ['id', 'ifRevision', 'body', 'knownCommentIds']; break;
+    case 'beginSubmit': fields = ['id', 'ifRevision', 'body']; break;
+    case 'recordSubmitReceipt': fields = ['id', 'attempt', 'receipt']; break;
+    case 'completeSubmit': fields = ['id', 'attempt', 'verified']; break;
     case 'finishSubmit': fields = ['id', 'ifRevision', 'outcome', 'remoteThreadId', 'remoteCommentId']; break;
     default: invalid('Unsupported draft action.');
   }
   keys(value, ['action', 'scope', ...fields], 'Request');
-  if (action === 'beginSubmit') {
-    if (!Array.isArray(value.knownCommentIds) || value.knownCommentIds.length > 100000) invalid('Submission baseline must be an array of at most 100000 comment IDs.');
-    const seen = new Set<string>();
-    for (const id of value.knownCommentIds) {
-      if (typeof id !== 'string' || id.length > 33 || !/^[1-9]\d*:[1-9]\d*$/u.test(id) || id.split(':').some(part => !Number.isSafeInteger(Number(part))) || seen.has(id)) invalid('Submission baseline requires unique positive thread:comment IDs.');
-      seen.add(id);
-    }
+  if (action === 'recordSubmitReceipt' || (action === 'completeSubmit' && value.verified !== undefined)) {
+    const receipt = action === 'recordSubmitReceipt' ? value.receipt : value.verified;
+    object(receipt, 'Publication receipt');
+    keys(receipt, ['threadId', 'commentId'], 'Publication receipt');
+    positive(receipt.threadId, 'Receipt thread ID');
+    positive(receipt.commentId, 'Receipt comment ID');
   }
   validateScope(value.scope);
   if (fields.includes('id')) text(value.id, 'Draft ID', 256);
   if (fields.includes('ifRevision')) positive(value.ifRevision, 'Revision');
+  if (fields.includes('attempt')) positive(value.attempt, 'Publication attempt');
   if (fields.includes('body')) body(value.body);
   if (action === 'create') text(value.requestId, 'Request ID', 256);
   if (action === 'create' || value.anchor !== undefined) validateAnchor(value.anchor, value.scope);
   if (action === 'finishSubmit') {
-    if (value.outcome !== 'published' && value.outcome !== 'failed' && value.outcome !== 'unknown') invalid('Submission outcome is unsupported.');
+    if (value.outcome !== 'published' && value.outcome !== 'failed') invalid('Submission outcome is unsupported.');
     for (const key of ['remoteThreadId', 'remoteCommentId']) if (value[key] !== undefined || value.outcome === 'published') positive(value[key], key);
     if (value.outcome !== 'published' && (value.remoteThreadId !== undefined || value.remoteCommentId !== undefined)) invalid('Remote IDs require a published outcome.');
   }
 }
 
-interface StoredDraft { id: string; scopeKey: string; draft: Draft }
+interface StoredDraft {
+  id: string;
+  scopeKey: string;
+  draft: Draft;
+  // The begin revision identifies this attempt even if worker startup advances the draft revision.
+  continuation?: { attempt: number; documentId: string; prUrl: string };
+}
 interface CreateReceipt { scopeKey: string; requestId: string; draftId: string; fingerprint: string }
 interface DraftDatabase extends DBSchema {
   drafts: { key: string; value: StoredDraft; indexes: { 'by-scope': string; 'by-scope-updated': [string, string] } };
@@ -213,11 +221,11 @@ export class DraftStore {
     } catch (error) { throw storageError(error); }
   }
 
-  async execute(request: DraftRequest): Promise<DraftResult> {
-    validateDraftRequest(request);
+  async execute(command: DraftRequest, documentId?: string): Promise<DraftResult> {
+    validateDraftRequest(command);
     if (this.closed) throw new DraftStoreError('CLOSED', t('Draft storage is closed.', 'De draftopslag is gesloten.'));
     // Snapshot caller-owned objects before the first await, including in direct tests/callers.
-    request = structuredClone(request);
+    const request = structuredClone(command);
     try {
       const hash = request.action === 'create' ? await fingerprint(request.body, request.anchor) : undefined;
       const database = await this.openDatabase();
@@ -255,21 +263,46 @@ export class DraftStore {
           }
         } else {
           const stored = await drafts.get(request.id);
-          if (!stored || stored.scopeKey !== key) throw new DraftStoreError('NOT_FOUND', t('Draft was not found in this account and pull request.', 'De draft is niet gevonden voor dit account en deze pull request.'));
+          const continuing = request.action === 'recordSubmitReceipt' || request.action === 'completeSubmit';
+          if (!stored || stored.scopeKey !== key || (continuing && (
+            !stored.continuation || stored.continuation.attempt !== request.attempt ||
+            stored.continuation.documentId !== documentId || stored.continuation.prUrl !== request.scope.route.prUrl
+          ))) {
+            if (continuing) throw new DraftStoreError('FORBIDDEN', t('This document cannot complete that publication attempt.', 'Dit document kan die publicatiepoging niet afhandelen.'));
+            throw new DraftStoreError('NOT_FOUND', t('Draft was not found in this account and pull request.', 'De draft is niet gevonden voor dit account en deze pull request.'));
+          }
           const draft = stored.draft;
-          if (request.ifRevision !== draft.revision) throw new DraftStoreError('CONFLICT', t('Draft changed in another tab. Reload it before retrying.', 'De draft is gewijzigd in een ander tabblad. Laad de draft opnieuw voordat je het opnieuw probeert.'));
-          if (request.action === 'finishSubmit') {
+          if (!continuing && request.ifRevision !== draft.revision) throw new DraftStoreError('CONFLICT', t('Draft changed in another tab. Reload it before retrying.', 'De draft is gewijzigd in een ander tabblad. Laad de draft opnieuw voordat je het opnieuw probeert.'));
+          if (request.action === 'recordSubmitReceipt') {
+            if ((draft.state !== 'sending' && draft.state !== 'unknown') || !draft.submission || draft.submission.receipt ||
+                (draft.anchor.kind === 'reply' && draft.anchor.threadId !== request.receipt.threadId)) {
+              throw new DraftStoreError('INVALID_STATE', t('Publication receipt does not match a pending submission.', 'De ontvangstbevestiging komt niet overeen met een openstaande publicatie.'));
+            }
+            draft.submission.receipt = request.receipt;
+            draft.revision++;
+            draft.updatedAt = new Date().toISOString();
+            await drafts.put(stored);
+            result = { acknowledged: true };
+          } else if (request.action === 'finishSubmit' || request.action === 'completeSubmit') {
             if (draft.state !== 'sending' && draft.state !== 'unknown') throw new DraftStoreError('INVALID_STATE', t('Draft has no pending submission to reconcile.', 'De draft heeft geen openstaande publicatie om te controleren.'));
-            if (request.outcome === 'published') {
+            const published = request.action === 'completeSubmit' ? !!request.verified : request.outcome === 'published';
+            if (published) {
+              const receipt = draft.submission?.receipt;
+              const threadId = request.action === 'completeSubmit' ? request.verified?.threadId : request.remoteThreadId;
+              const commentId = request.action === 'completeSubmit' ? request.verified?.commentId : request.remoteCommentId;
+              if (!receipt || receipt.threadId !== threadId || receipt.commentId !== commentId) {
+                throw new DraftStoreError('INVALID_STATE', t('Verified publication IDs do not match the stored receipt.', 'De geverifieerde publicatie-ID’s komen niet overeen met de opgeslagen ontvangstbevestiging.'));
+              }
               await drafts.delete(draft.id);
               result = { deleted: true };
             } else {
-              draft.state = request.outcome === 'failed' ? 'saved' : 'unknown';
-              if (request.outcome === 'failed') delete draft.submission;
+              draft.state = request.action === 'finishSubmit' ? 'saved' : 'unknown';
+              if (draft.state === 'saved') delete draft.submission;
+              delete stored.continuation;
               draft.revision++;
               draft.updatedAt = new Date().toISOString();
               await drafts.put(stored);
-              result = { draft };
+              result = request.action === 'completeSubmit' ? { acknowledged: true } : { draft };
             }
           } else {
             if (draft.state === 'sending' || (draft.state === 'unknown' && request.action !== 'delete')) throw new DraftStoreError('INVALID_STATE', t('Check the uncertain publication result before editing or submitting this draft.', 'Controleer het onzekere publicatieresultaat voordat je deze draft bewerkt of publiceert.'));
@@ -281,8 +314,10 @@ export class DraftStore {
               if (request.action === 'update') {
                 if (request.anchor) draft.anchor = request.anchor;
               } else {
+                if (!documentId) throw new DraftStoreError('FORBIDDEN', t('Publication requires a browser document identity.', 'Publicatie vereist een browserdocumentidentiteit.'));
+                stored.continuation = { attempt: draft.revision + 1, documentId, prUrl: request.scope.route.prUrl };
                 draft.state = 'sending';
-                draft.submission = { body: request.body, startedAt: new Date().toISOString(), knownCommentIds: request.knownCommentIds };
+                draft.submission = { body: request.body, startedAt: new Date().toISOString() };
               }
               draft.revision++;
               draft.updatedAt = new Date().toISOString();

@@ -1,4 +1,4 @@
-import type { Anchor, Draft, PrRoute, Scope } from './contracts';
+import { isPositiveId, scopeKey, type Draft, type PrRoute, type PublicationReceipt, type Scope } from './contracts';
 import { t } from './i18n';
 
 interface Identity { id: string; descriptor?: string; uniqueName?: string; displayName: string }
@@ -60,9 +60,11 @@ export async function loadPrContext(route: PrRoute): Promise<PrContext> {
     latestIteration,
   };
 }
+function threadsUrl({ scope: { route, repositoryId } }: PrContext): string {
+  return `${route.organizationUrl}/${encodeURIComponent(route.project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${route.pullRequestId}/threads`;
+}
 export async function readThreads(context: PrContext): Promise<RemoteThread[]> {
-  const { route, repositoryId } = context.scope;
-  const result = await readJson<{ value: RemoteThread[] }>(`${route.organizationUrl}/${encodeURIComponent(route.project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${route.pullRequestId}/threads?api-version=7.1`);
+  const result = await readJson<{ value: RemoteThread[] }>(`${threadsUrl(context)}?api-version=7.1`);
   if (!Array.isArray(result.value)) throw new Error(t('Invalid thread response from Azure DevOps.', 'Ongeldig threadantwoord van Azure DevOps.'));
   return result.value;
 }
@@ -70,25 +72,37 @@ export function isStale(draft: Draft, context: PrContext, threads: RemoteThread[
   if (draft.anchor.kind === 'reply') return !threads.some((thread) => thread.id === draft.anchor.threadId && !thread.isDeleted);
   return draft.anchor.kind === 'inline' && (draft.anchor.sourceCommit !== context.sourceCommit || draft.anchor.targetCommit !== context.targetCommit);
 }
-export function anchorMatchesThread(anchor: Anchor, thread: RemoteThread): boolean {
-  if (thread.isDeleted) return false;
-  if (anchor.kind === 'reply') return anchor.threadId === thread.id;
-  if (anchor.kind === 'general') return !thread.threadContext?.filePath;
-  const context = thread.threadContext;
-  if (!context || context.filePath !== anchor.filePath) return false;
-  const start = anchor.side === 'left' ? context.leftFileStart : context.rightFileStart;
-  const end = anchor.side === 'left' ? context.leftFileEnd : context.rightFileEnd;
-  return !!start && !!end && start.line === anchor.start?.line && start.offset === anchor.start.offset && end.line === anchor.end?.line && end.offset === anchor.end.offset;
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-export function findPublication(draft: Draft, threads: RemoteThread[], user: Identity): { threadId: number; commentId: number } | undefined {
-  if (!draft.submission) return;
-  const known = new Set(draft.submission.knownCommentIds);
-  const candidates = threads.flatMap((thread) => {
-    if (!anchorMatchesThread(draft.anchor, thread)) return [];
-    return thread.comments.filter((comment) => {
-      const sameAuthor = comment.author.id === user.id || (!!user.descriptor && comment.author.descriptor === user.descriptor) || (!!user.uniqueName && comment.author.uniqueName === user.uniqueName);
-      return !comment.isDeleted && sameAuthor && comment.content === draft.submission!.body && !known.has(`${thread.id}:${comment.id}`);
-    }).map((comment) => ({ threadId: thread.id, commentId: comment.id }));
-  });
-  return candidates.length === 1 ? candidates[0] : undefined;
+
+export async function findPublication(draft: Draft, context: PrContext): Promise<PublicationReceipt | undefined> {
+  const submission = draft.submission;
+  if (!submission) return;
+  const { receipt } = submission;
+  if (!receipt || !isPositiveId(receipt.threadId) || !isPositiveId(receipt.commentId) || draft.state === 'saved' ||
+      scopeKey(draft.scope) !== scopeKey(context.scope) ||
+      (draft.anchor.kind === 'reply' && draft.anchor.threadId !== receipt.threadId)) return;
+
+  const thread = await readJson<unknown>(`${threadsUrl(context)}/${receipt.threadId}?api-version=7.1`);
+  if (!record(thread) || thread.id !== receipt.threadId || thread.isDeleted || !Array.isArray(thread.comments)) return;
+  const { anchor } = draft;
+  const location = thread.threadContext;
+  if (anchor.kind === 'general' && record(location) && location.filePath) return;
+  if (anchor.kind === 'inline') {
+    if (!anchor.filePath || !anchor.side || !anchor.start || !anchor.end || !record(location) || location.filePath !== anchor.filePath) return;
+    const start = anchor.side === 'left' ? location.leftFileStart : location.rightFileStart;
+    const end = anchor.side === 'left' ? location.leftFileEnd : location.rightFileEnd;
+    if (!record(start) || !record(end) ||
+        start.line !== anchor.start.line || start.offset !== anchor.start.offset ||
+        end.line !== anchor.end.line || end.offset !== anchor.end.offset) return;
+  }
+
+  const { user } = context;
+  const comments: unknown[] = thread.comments;
+  for (const comment of comments) {
+    if (!record(comment) || comment.id !== receipt.commentId || comment.isDeleted || comment.content !== submission.body || !record(comment.author)) continue;
+    if (comment.author.id === user.id || (user.descriptor && comment.author.descriptor === user.descriptor) ||
+        (user.uniqueName && comment.author.uniqueName === user.uniqueName)) return receipt;
+  }
 }
