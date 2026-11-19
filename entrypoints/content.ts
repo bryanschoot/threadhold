@@ -10,7 +10,7 @@ import { readMonacoBindings, syncMonacoDraftSlots, type MonacoBinding } from '..
 import { t } from '../src/i18n';
 import '../src/content.css';
 
-type EditorState = { editor: NativeEditor; controls: SaveControl; draft?: Draft; requestId: string; editing: boolean; dispose(): void };
+type EditorState = { editor: NativeEditor; controls: SaveControl; draft?: Draft; requestId?: string; editing: boolean; dispose(): void };
 
 export default defineContentScript({
   matches: ['https://dev.azure.com/*', 'https://*.visualstudio.com/*'],
@@ -106,13 +106,7 @@ export default defineContentScript({
         mountEditors();
         const state = editors.get(editor.textarea);
         if (!state) throw new Error(t('This native editor is not recognized.', 'Deze native editor wordt niet herkend.'));
-        state.draft = draft; state.controls.setBinding(draft);
-        state.editing = true; state.controls.setEditing(true);
-        editor.root.classList.add('th-draft-editing');
-        editor.publish.classList.add('th-native-publish-hidden');
-        editor.secondaryPublish?.classList.add('th-native-publish-hidden');
-        const card = cards.get(draft.id);
-        if (card) card.hidden = true;
+        startEditing(state, draft);
         writeEditor(editor, draft.body);
         editor.root.scrollIntoView({ block: 'center' });
       },
@@ -250,11 +244,21 @@ export default defineContentScript({
         await refresh();
       }
     }
+    function startEditing(state: EditorState, draft: Draft) {
+      state.requestId = undefined;
+      state.draft = draft; state.controls.setBinding(draft);
+      state.editing = true; state.controls.setEditing(true);
+      state.editor.root.classList.add('th-draft-editing');
+      state.editor.publish.classList.add('th-native-publish-hidden');
+      state.editor.secondaryPublish?.classList.add('th-native-publish-hidden');
+      const card = cards.get(draft.id);
+      if (card) card.hidden = true;
+    }
     function finishEditing(state: EditorState, collapse: boolean) {
       state.editing = false;
       state.editor.root.classList.remove('th-draft-editing');
       state.draft = undefined;
-      state.requestId = crypto.randomUUID();
+      state.requestId = undefined;
       state.controls.setEditing(false);
       state.controls.setBinding();
       state.editor.publish.classList.remove('th-native-publish-hidden');
@@ -266,7 +270,7 @@ export default defineContentScript({
       for (const [element, state] of editors) if (!element.isConnected) { state.dispose(); editors.delete(element); }
       for (const editor of discoverEditors(context, threads, monacoBindings)) {
         const existing = editors.get(editor.textarea);
-        if (existing && sameEditor(existing.editor.anchor, editor.anchor)) {
+        if (existing && existing.editor.root === editor.root && sameEditor(existing.editor.anchor, editor.anchor)) {
           existing.editor = editor;
           if (existing.controls.element.parentElement !== editor.actions) editor.actions.prepend(existing.controls.element);
           if (existing.editing) {
@@ -277,36 +281,72 @@ export default defineContentScript({
         }
         if (existing) { existing.dispose(); editors.delete(editor.textarea); }
         const controls = createSaveControl(async () => {
+          const version = generation;
+          const pathname = location.pathname;
+          // A native cancel can end the session without replacing the textarea.
+          const requestId = state.requestId ??= crypto.randomUUID();
+          const samePr = () => !disposed && generation === version && location.pathname === pathname;
+          const stillActive = () => samePr() && editors.get(editor.textarea) === state && state.requestId === requestId
+            && editor.textarea.closest('.repos-comment-editor-fit') === editor.root && editor.textarea.getClientRects().length > 0;
+          const keepEditing = (draft: Draft) => {
+            startEditing(state, draft);
+            controls.report(t('The editor still contains unsaved text. Save again to keep it.', 'De editor bevat nog niet-opgeslagen tekst. Sla opnieuw op om die te bewaren.'));
+          };
           const fresh = await current();
-          threads = await readThreads(fresh);
-          if (editor.anchor.kind === 'inline' && (editor.anchor.sourceCommit !== fresh.sourceCommit || editor.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
-          if (editor.anchor.kind === 'reply' && !threads.some(thread => thread.id === editor.anchor.threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
-          if (reanchorDraft) {
-            const text = readEditor(editor);
-            if (text.trim() && text !== reanchorDraft.body) throw new Error(t('This editor contains different text. Save or remove that text yourself first.', 'Deze editor bevat andere tekst. Bewaar of verwijder die eerst zelf.'));
-            const result = await request({ action: 'update', scope: fresh.scope, id: reanchorDraft.id, ifRevision: reanchorDraft.revision, body: reanchorDraft.body, anchor: editor.anchor });
+          const loadedThreads = await readThreads(fresh);
+          if (!stillActive()) throw new Error(t('The editor is no longer available.', 'De editor is niet meer beschikbaar.'));
+          threads = loadedThreads;
+          const active = state.editor;
+          if (active.anchor.kind === 'inline' && (active.anchor.sourceCommit !== fresh.sourceCommit || active.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
+          const threadId = active.anchor.threadId;
+          if (active.anchor.kind === 'reply' && !threads.some(thread => thread.id === threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
+          const body = readEditor(active);
+          const reattaching = reanchorDraft;
+          if (reattaching) {
+            if (body.trim() && body !== reattaching.body) throw new Error(t('This editor contains different text. Save or remove that text yourself first.', 'Deze editor bevat andere tekst. Bewaar of verwijder die eerst zelf.'));
+            const result = await request({ action: 'update', scope: fresh.scope, id: reattaching.id, ifRevision: reattaching.revision, body: reattaching.body, anchor: active.anchor });
             if (!('draft' in result)) throw new Error(t('No durable storage confirmation.', 'Geen duurzame opslagbevestiging.'));
-            state.draft = result.draft; reanchorDraft = undefined;
-            writeEditor(editor, result.draft.body);
-            for (const item of editors.values()) item.controls.setBinding(item.draft);
-            controls.report(t('New native location confirmed; draft ID retained.', 'Nieuwe native locatie bevestigd; draft-ID behouden.'));
+            if (!samePr()) return;
+            if (reanchorDraft === reattaching) {
+              reanchorDraft = undefined;
+              for (const item of editors.values()) item.controls.setBinding(item.draft);
+            }
+            if (stillActive()) {
+              if (readEditor(state.editor) !== body) {
+                keepEditing(result.draft);
+                show(t('New native location confirmed. The editor still contains unsaved text; save again to keep it.', 'Nieuwe native locatie bevestigd. De editor bevat nog niet-opgeslagen tekst; sla opnieuw op om die te bewaren.'));
+              } else {
+                state.draft = result.draft; controls.setBinding(result.draft);
+                writeEditor(state.editor, result.draft.body);
+                controls.report(t('New native location confirmed; draft ID retained.', 'Nieuwe native locatie bevestigd; draft-ID behouden.'));
+              }
+            }
             await refresh();
             return;
           }
           if (state.draft && isStale(state.draft, fresh, threads)) throw new Error(t('Location is outdated. Draft text is retained; explicitly choose a new native location.', 'Locatie verouderd. Drafttekst blijft bewaard; kies expliciet een nieuwe native locatie.'));
-          if (!editor.textarea.isConnected) throw new Error(t('The editor is no longer available.', 'De editor is niet meer beschikbaar.'));
-          const body = readEditor(editor);
           const result = state.draft
             ? await request({ action: 'update', scope: fresh.scope, id: state.draft.id, ifRevision: state.draft.revision, body })
-            : await request({ action: 'create', scope: fresh.scope, anchor: { ...editor.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId: state.requestId });
+            : await request({ action: 'create', scope: fresh.scope, anchor: { ...active.anchor, sourceCommit: fresh.sourceCommit, targetCommit: fresh.targetCommit }, body, requestId });
           if (!('draft' in result)) throw new Error(t('No durable storage confirmation received.', 'Geen duurzame opslagbevestiging ontvangen.'));
-          state.draft = result.draft; controls.setBinding(result.draft);
-          controls.report(t('Saved', 'Opgeslagen'));
-          finishEditing(state, true);
+          if (!samePr()) return;
+          let hasUnsavedText = false;
+          if (stillActive()) {
+            hasUnsavedText = readEditor(state.editor) !== body || result.draft.body !== body;
+            if (hasUnsavedText) {
+              keepEditing(result.draft);
+            } else {
+              controls.report(t('Saved', 'Opgeslagen'));
+              finishEditing(state, true);
+            }
+          }
           await refresh();
-          show(t(`Draft saved locally · revision ${result.draft.revision}.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}.`));
+          if (!samePr()) return;
+          show(hasUnsavedText
+            ? t(`Draft saved locally · revision ${result.draft.revision}. The editor still contains unsaved text.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}. De editor bevat nog niet-opgeslagen tekst.`)
+            : t(`Draft saved locally · revision ${result.draft.revision}.`, `Draft lokaal opgeslagen · revisie ${result.draft.revision}.`));
         });
-        const state: EditorState = { editor, controls, requestId: crypto.randomUUID(), editing: false, dispose() {
+        const state: EditorState = { editor, controls, editing: false, dispose() {
           editor.root.removeEventListener('click', onClick, true); editor.root.removeEventListener('keydown', onKey, true);
           state.editor.root.classList.remove('th-draft-editing');
           state.editor.publish.classList.remove('th-native-publish-hidden'); state.editor.secondaryPublish?.classList.remove('th-native-publish-hidden');
@@ -315,9 +355,13 @@ export default defineContentScript({
         function onClick(event: MouseEvent) {
           if (!(event.target instanceof Element)) return;
           const button = event.target.closest('button');
-          if (button === state.editor.cancel && state.editing) {
-            finishEditing(state, false);
-            render();
+          if (button === state.editor.cancel) {
+            if (state.editing) {
+              finishEditing(state, false);
+              render();
+            } else {
+              state.requestId = undefined;
+            }
             return;
           }
           if (!state.editing || (button !== state.editor.publish && button !== state.editor.secondaryPublish)) return;

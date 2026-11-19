@@ -154,6 +154,51 @@ test.beforeEach(async ({ locale }) => {
 });
 test.afterEach(async () => { await context?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
 
+async function duringDraftWrite(startSave: () => Promise<void>, whilePending: () => Promise<void>) {
+  const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+  await worker.evaluate(async () => {
+    const open = indexedDB.open('threadhold');
+    const { promise: opened, resolve, reject } = Promise.withResolvers<IDBDatabase>();
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+    const database = await opened;
+    const lock = database.transaction('drafts', 'readwrite');
+    const store = lock.objectStore('drafts');
+    let released = false;
+    // Keep an earlier overlapping transaction active so the real save queues behind it.
+    function holdLock() {
+      if (!released) store.get('__fixture_lock__').onsuccess = holdLock;
+    }
+    holdLock();
+    lock.oncomplete = () => database.close();
+
+    const transaction = IDBDatabase.prototype.transaction;
+    const { promise: queued, resolve: signalQueued } = Promise.withResolvers<void>();
+    IDBDatabase.prototype.transaction = function (names, mode, options) {
+      const result = transaction.call(this, names, mode, options);
+      if (this.name === database.name && mode === 'readwrite' && result.objectStoreNames.contains('requests')) signalQueued();
+      return result;
+    };
+    Reflect.set(globalThis, '__threadholdWriteGate', {
+      queued,
+      release() {
+        IDBDatabase.prototype.transaction = transaction;
+        released = true;
+      },
+    });
+  });
+  try {
+    await startSave();
+    await worker.evaluate(() => Reflect.get(globalThis, '__threadholdWriteGate').queued);
+    await whilePending();
+  } finally {
+    await worker.evaluate(() => {
+      Reflect.get(globalThis, '__threadholdWriteGate').release();
+      Reflect.deleteProperty(globalThis, '__threadholdWriteGate');
+    });
+  }
+}
+
 test('browser-agent CRUD survives reload and never publishes', async () => {
   const text = 'Lokale review: café 🧵\n**Markdown** @<user-id> <img src=x onerror=alert(1)>';
   await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill(text);
@@ -203,6 +248,68 @@ test('native draft editing saves locally with Ctrl+Enter and cancel keeps the sa
   await expect(card.locator('.th-body')).toHaveText('Local keyboard edit');
   expect(writes).toBe(0);
 });
+
+test('typing during draft creation preserves newer text and Ctrl+Enter updates the same draft', async () => {
+  const thread = page.locator('[data-existing-thread]');
+  await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+  const editor = thread.locator('textarea');
+  const create = thread.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  await editor.fill('Snapshot voor opslag');
+  await duringDraftWrite(() => create.click(), () => editor.fill('Nieuwere replytekst'));
+
+  const card = thread.locator('[data-threadhold-card]');
+  const save = thread.getByRole('button', { name: 'Opslaan', exact: true });
+  await expect(save).toBeEnabled();
+  await expect(editor).toHaveValue('Nieuwere replytekst');
+  await expect(page.locator('.page-content > [data-threadhold-status]')).toContainText('De editor bevat nog niet-opgeslagen tekst.');
+  await expect(card.locator('.th-body')).toHaveText('Snapshot voor opslag');
+  await expect(card).toHaveAttribute('data-threadhold-revision', '1');
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  await expect(save).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(save).toHaveAttribute('data-threadhold-revision', '1');
+  await expect(thread.locator('button').filter({ hasText: /^Reply(?: & resolve)?$/ })).toHaveCount(2);
+  await expect(thread.locator('button').filter({ hasText: /^Reply$/ })).toBeHidden();
+  await expect(thread.locator('button').filter({ hasText: /^Reply & resolve$/ })).toBeHidden();
+
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveValue('');
+  await expect(card).toBeVisible();
+  await expect(card.locator('.th-body')).toHaveText('Nieuwere replytekst');
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(page.locator('[data-threadhold-card]')).toHaveCount(1);
+  expect(writes).toBe(0);
+});
+
+for (const replace of [false, true]) {
+test(`draft completion cannot close a ${replace ? 'replacement' : 'cancelled and reopened'} editor`, async () => {
+  if (replace) {
+    await page.goto(`${url}?collapsed-general=1`);
+    await page.getByRole('textbox', { name: 'Add a comment...', exact: true }).click();
+  }
+  const editor = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  const create = page.getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const text = 'Same text in a different editor session';
+  await editor.fill(text);
+  await duringDraftWrite(() => create.click(), async () => {
+    if (replace) {
+      await editor.evaluate(node => node.replaceWith(node.cloneNode(true)));
+    } else {
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    await editor.fill(text);
+    if (replace) await expect(create).toBeEnabled();
+  });
+
+  const card = page.locator('[data-threadhold-card]');
+  await expect(card.locator('.th-body')).toHaveText(text);
+  await expect(card).toBeVisible();
+  await expect(editor).toHaveValue(text);
+  await expect(create).toBeEnabled();
+  await expect(create).not.toHaveAttribute('data-threadhold-draft-id', /.+/);
+  expect(writes).toBe(0);
+});
+}
 
 test('reply draft follows the native thread after expansion and reload without DOM thread IDs', async () => {
   const thread = page.locator('[data-existing-thread]');
@@ -330,6 +437,43 @@ test('English browser gets English draft actions and native editing', async () =
   await card.getByRole('button', { name: 'Delete draft', exact: true }).click();
   await card.getByRole('button', { name: 'Yes, delete draft', exact: true }).click();
   await expect(card).toHaveCount(0);
+  expect(writes).toBe(0);
+});
+
+test('typing during a draft update preserves exact text and advances the binding', async () => {
+  const editor = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  await editor.fill('Original local draft');
+  await page.getByRole('button', { name: 'Save as draft', exact: true }).click();
+  const card = page.locator('[data-threadhold-card]');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  const id = await card.getAttribute('data-threadhold-draft-id');
+  const save = page.getByRole('button', { name: 'Save', exact: true });
+  await expect(editor).toHaveValue('Original local draft');
+  await expect(save).toBeEnabled();
+  const snapshot = 'Updated local draft';
+  const newer = `${snapshot} `;
+  await editor.fill(snapshot);
+  await duringDraftWrite(() => editor.press('Control+Enter'), () => editor.fill(newer));
+
+  await expect(save).toBeEnabled();
+  await expect(editor).toHaveValue(newer);
+  await expect(page.locator('.page-content > [data-threadhold-status]')).toContainText('The editor still contains unsaved text.');
+  await expect(card.locator('.th-body')).toHaveText(snapshot);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(save).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(save).toHaveAttribute('data-threadhold-revision', '2');
+  await expect(page.locator('#__bolt-comment-1')).toBeHidden();
+
+  await editor.press('Control+Enter');
+  await expect(editor).toHaveValue('');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('data-threadhold-revision', '3');
+  await page.reload();
+  await expect(card).toHaveCount(1);
+  await expect(card).toHaveAttribute('data-threadhold-draft-id', id!);
+  await expect(card).toHaveAttribute('data-threadhold-revision', '3');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(editor).toHaveValue(newer);
   expect(writes).toBe(0);
 });
 });
