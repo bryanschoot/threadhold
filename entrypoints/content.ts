@@ -1,6 +1,6 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { browser } from 'wxt/browser';
-import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PrRoute } from '../src/contracts';
+import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PrRoute, type PublicationReceipt } from '../src/contracts';
 import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import { discoverEditors, findDraftLocation, installNativeDiffCapture, openDraftEditor, readEditor, readNativeEditorActions, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
@@ -168,12 +168,17 @@ export default defineContentScript({
         location.assign(url.href);
       },
       async check(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
+        if (!onScope(version, scope)) return;
         const found = await findPublication(draft, fresh);
+        if (!onScope(version, scope)) return;
         if (!found) throw new Error(t('The exact comment from the publication receipt could not be confirmed. The draft is retained; check for duplicates before publishing again.', 'De exacte comment uit de ontvangstbevestiging kon niet worden bevestigd. Draft blijft behouden; publiceer niet opnieuw zonder controle op duplicaten.'));
         await request({ action: 'finishSubmit', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, outcome: 'published', remoteThreadId: found.threadId, remoteCommentId: found.commentId });
         await refresh();
-        show(t('Publication confirmed; local draft removed.', 'Publicatie bevestigd; lokale draft opgeruimd.'));
+        if (onScope(version, scope)) show(t('Publication confirmed; local draft removed.', 'Publicatie bevestigd; lokale draft opgeruimd.'));
       },
       reanchor(draft) {
         const version = generation;
@@ -192,7 +197,11 @@ export default defineContentScript({
         reattachNotice.report(t('Open the correct native comment location and choose Reattach draft here. The original draft is retained until the new location is confirmed.', 'Open de juiste native commentlocatie en kies Draft hier koppelen. De oorspronkelijke draft blijft bewaard tot de nieuwe locatie is bevestigd.'));
       },
       async reset(draft) {
+        const version = generation;
+        const scope = scopeKey(draft.scope);
+        if (!onScope(version, scope)) return;
         const fresh = await current();
+        if (!onScope(version, scope)) return;
         if (!window.confirm(t('This comment may already have been published. Check Azure DevOps first: publishing again may create a duplicate. Edit again anyway?', 'Deze comment kan al gepubliceerd zijn. Controleer Azure DevOps eerst: opnieuw publiceren kan een duplicaat maken. Toch opnieuw bewerken?'))) throw new Error(t('Draft retained unchanged.', 'Draft ongewijzigd behouden.'));
         await request({ action: 'finishSubmit', scope: fresh.scope, id: draft.id, ifRevision: draft.revision, outcome: 'failed' });
         await refresh();
@@ -213,7 +222,7 @@ export default defineContentScript({
       publishControl?.remove();
       publishControl = createPublishControl(drafts, async () => {
         try { await publishAll(); }
-        catch (error) { if (version === generation) show(String(error), true); throw error; }
+        catch (error) { if (onRoute(version)) show(String(error), true); throw error; }
       });
       publishControl.disabled ||= batchPublishing;
       headerActionAnchor()?.after(publishControl);
@@ -246,7 +255,7 @@ export default defineContentScript({
       const version = generation;
       const fresh = await current();
       const scope = scopeKey(fresh.scope);
-      const mayStart = () => !disposed && generation === version && parsePrRoute(location.href)?.prUrl === fresh.scope.route.prUrl;
+      const mayStart = () => onScope(version, scope);
       const initialThreads = await readThreads(fresh);
       if (!mayStart()) return;
       const listed = await request({ action: 'list', scope: fresh.scope });
@@ -304,7 +313,7 @@ export default defineContentScript({
         throw error;
       } finally {
         batchPublishing = false;
-        await refresh();
+        await refresh(mayStart());
       }
     }
     function endEditorSession(state: EditorState) {

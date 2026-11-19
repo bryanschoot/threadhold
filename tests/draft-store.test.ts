@@ -202,8 +202,8 @@ describe('durable native submission journal', () => {
     const name = crypto.randomUUID();
     const original = open(name);
     const saved = await draft(original, create());
-    const begin = { action: 'beginSubmit' as const, scope, id: saved.id, body: saved.body, knownCommentIds: [] };
-    await original.execute({ ...begin, ifRevision: saved.revision });
+    const begin = { action: 'beginSubmit' as const, scope, id: saved.id, body: saved.body };
+    await original.execute({ ...begin, ifRevision: saved.revision }, documentId);
     await original.close();
 
     const incompatibleName = crypto.randomUUID();
@@ -221,7 +221,7 @@ describe('durable native submission journal', () => {
       const unknown = await draft(restarted, { action: 'get', scope, id: saved.id });
       expect(unknown.state).toBe('unknown');
       const ready = await draft(restarted, { action: 'finishSubmit', scope, id: saved.id, ifRevision: unknown.revision, outcome: 'failed' });
-      const sending = await draft(restarted, { ...begin, ifRevision: ready.revision });
+      const sending = await draft(restarted, { ...begin, ifRevision: ready.revision }, documentId);
       await restarted.recoverSubmissions();
       expect(await restarted.execute({ action: 'list', scope })).toEqual({ drafts: [sending] });
     } finally {
@@ -229,7 +229,7 @@ describe('durable native submission journal', () => {
     }
   });
 
-  it('preserves unknown results and only removes drafts after confirmed positive remote IDs', async () => {
+  it('preserves an unknown draft and only removes it for IDs matching the stored receipt', async () => {
     const store = open();
     const request = create();
     const saved = await draft(store, request);

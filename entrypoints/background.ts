@@ -61,6 +61,9 @@ export default defineBackground(() => {
           throw new DraftStoreError('FORBIDDEN', t('The extension does not have access to this Azure DevOps origin.', 'De extensie heeft geen toegang tot deze Azure DevOps-oorsprong.'));
         }
         await store.recoverSubmissions();
+        // Only journal continuation reaches the store without a current-route match.
+        // The store checks the original scope, draft, attempt and browser document.
+        if (continuing) return await execute();
         const route = parsePrRoute((await browser.tabs.get(sender.tab.id)).url ?? '');
         if (!route || !samePrRoute(route, scope.route)) {
           throw new DraftStoreError('FORBIDDEN', t('Draft scope does not match the sender’s PR route.', 'De draftcontext komt niet overeen met de PR-route van de afzender.'));

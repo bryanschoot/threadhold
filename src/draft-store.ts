@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
-import { scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type Scope } from './contracts';
+import { isPositiveId, scopeKey, type Anchor, type Draft, type DraftRequest, type DraftResult, type Scope } from './contracts';
 import { parsePrRoute, samePrRoute } from './routes';
 import { t } from './i18n';
 

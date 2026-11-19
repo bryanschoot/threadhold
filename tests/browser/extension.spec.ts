@@ -710,7 +710,8 @@ test('header publication with an unconfirmed GET keeps the receipt across reload
   expect(writes).toBe(1);
 });
 
-test('header publication can finish an in-flight POST after switching PRs without starting another', async () => {
+for (const restart of [false, true]) {
+test(`header publication finishes after switching PRs${restart ? ' and restarting the worker' : ''} without another POST`, async () => {
   const textbox = page.getByRole('textbox', { name: 'Add a comment', exact: true });
   const save = page.locator('.repos-comment-editor-fit').filter({ has: textbox })
     .getByRole('button', { name: 'Opslaan als draft', exact: true });
@@ -738,6 +739,28 @@ test('header publication can finish an in-flight POST after switching PRs withou
     await textbox.fill('Separate draft on the next PR');
     await save.click();
     await expect(cards.locator('.th-body')).toHaveText('Separate draft on the next PR');
+    if (restart) {
+      const worker = context.serviceWorkers()[0]!;
+      const workerUrl = new URL(worker.url());
+      const popup = context.pages().find(tab => new URL(tab.url()).hostname === workerUrl.hostname)!;
+      const session = await context.newCDPSession(popup);
+      try {
+        const stopped = Promise.withResolvers<void>();
+        session.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+          for (const version of versions) {
+            if (version.scriptURL !== workerUrl.href) continue;
+            if (version.runningStatus === 'stopped') stopped.resolve();
+            if (version.runningStatus === 'running') {
+              void session.send('ServiceWorker.stopWorker', { versionId: version.versionId }).catch(stopped.reject);
+            }
+          }
+        });
+        await session.send('ServiceWorker.enable');
+        await stopped.promise;
+      } finally {
+        await session.detach();
+      }
+    }
   } finally {
     allowResponse.resolve();
   }
@@ -748,6 +771,7 @@ test('header publication can finish an in-flight POST after switching PRs withou
   await expect(cards.locator('.th-body')).toHaveText('Leave this draft on the original PR');
   expect(writes).toBe(1);
 });
+}
 
 for (const split of [false, true]) for (const side of split ? ['left', 'right'] as const : ['right'] as const) for (const multiline of [false, true]) {
 test(`Monaco ${split ? 'split' : 'inline'} ${side} ${multiline ? 'multiline' : 'single-line'} draft survives native editing and reload`, async () => {
