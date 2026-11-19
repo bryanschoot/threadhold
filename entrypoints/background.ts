@@ -39,6 +39,7 @@ export default defineBackground(() => {
         }
         let scope: Scope;
         let execute: () => Promise<ExtensionResponse | MonacoResponse>;
+        let continuing = false;
         if (message.channel === 'threadhold-monaco') {
           const request = validateMonacoRequest(message.request);
           scope = request.action === 'open' ? request.scope : request.context.scope;
@@ -47,21 +48,30 @@ export default defineBackground(() => {
           validateDraftRequest(message.request);
           const request = message.request;
           scope = request.scope;
-          execute = async () => ({ ok: true, result: await store.execute(request) });
+          continuing = request.action === 'recordSubmitReceipt' || request.action === 'completeSubmit';
+          execute = async () => ({ ok: true, result: await store.execute(request, sender.documentId) });
         }
-        const route = parsePrRoute(sender.url);
-        if (!route || (sender.origin !== undefined && sender.origin !== route.origin) ||
-            route.origin !== scope.route.origin ||
+        // The sender URL can still be the document's original URL after history.pushState.
+        // Check its origin, then validate the exact PR against the tab's committed URL.
+        const source = new URL(sender.url);
+        if (source.protocol !== 'https:' || source.origin !== scope.route.origin ||
+            (sender.origin !== undefined && sender.origin !== source.origin)) {
+          throw new DraftStoreError('FORBIDDEN', t('Draft scope does not match the sender’s origin.', 'De draftcontext komt niet overeen met de oorsprong van de afzender.'));
+        }
+        if (!await browser.permissions.contains({ origins: [`${source.origin}/*`] })) {
+          throw new DraftStoreError('FORBIDDEN', t('The extension does not have access to this Azure DevOps origin.', 'De extensie heeft geen toegang tot deze Azure DevOps-oorsprong.'));
+        }
+        await ready;
+        // Only these two journal mutations can use the store's exact document/attempt grant.
+        if (continuing) return await execute();
+        const route = parsePrRoute((await browser.tabs.get(sender.tab.id)).url ?? '');
+        if (!route || route.origin !== scope.route.origin ||
             route.organization.toLowerCase() !== scope.route.organization.toLowerCase() ||
             route.project.toLowerCase() !== scope.route.project.toLowerCase() ||
             route.repository.toLowerCase() !== scope.route.repository.toLowerCase() ||
             route.pullRequestId !== scope.route.pullRequestId) {
           throw new DraftStoreError('FORBIDDEN', t('Draft scope does not match the sender’s PR route.', 'De draftcontext komt niet overeen met de PR-route van de afzender.'));
         }
-        if (!await browser.permissions.contains({ origins: [`${route.origin}/*`] })) {
-          throw new DraftStoreError('FORBIDDEN', t('The extension does not have access to this Azure DevOps origin.', 'De extensie heeft geen toegang tot deze Azure DevOps-oorsprong.'));
-        }
-        await ready;
         return await execute();
       } catch (error) {
         return {

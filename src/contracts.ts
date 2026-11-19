@@ -50,9 +50,10 @@ export type DraftRequest =
   | { action: 'update'; scope: Scope; id: string; ifRevision: number; body: string; anchor?: Anchor }
   | { action: 'delete'; scope: Scope; id: string; ifRevision: number }
   | { action: 'beginSubmit'; scope: Scope; id: string; ifRevision: number; body: string }
-  | { action: 'recordSubmitReceipt'; scope: Scope; id: string; ifRevision: number; receipt: PublicationReceipt }
-  | { action: 'finishSubmit'; scope: Scope; id: string; ifRevision: number; outcome: 'published' | 'failed' | 'unknown'; remoteThreadId?: number; remoteCommentId?: number };
-export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: true };
+  | { action: 'recordSubmitReceipt'; scope: Scope; id: string; attempt: number; receipt: PublicationReceipt }
+  | { action: 'completeSubmit'; scope: Scope; id: string; attempt: number; verified?: PublicationReceipt }
+  | { action: 'finishSubmit'; scope: Scope; id: string; ifRevision: number; outcome: 'published' | 'failed'; remoteThreadId?: number; remoteCommentId?: number };
+export type DraftResult = { drafts: Draft[] } | { draft: Draft } | { deleted: true } | { acknowledged: true };
 export type ExtensionRequest = { channel: 'threadhold'; request: DraftRequest };
 export type ExtensionResponse = { ok: true; result: DraftResult } | { ok: false; error: { code: string; message: string } };
 export function isPositiveId(value: unknown): value is number {

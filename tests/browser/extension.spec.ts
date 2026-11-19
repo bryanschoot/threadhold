@@ -84,6 +84,8 @@ let page: Page;
 let directory: string;
 let writes: number;
 let failPublication: boolean;
+let failVerification: boolean;
+let publicationResponseGate: Promise<void> | undefined;
 let remoteThreads: { id: number; comments: { id: number; content: string; publishedDate: string; author: { id: string; displayName: string } }[] }[];
 test.use({ locale: 'nl-NL' });
 
@@ -113,6 +115,7 @@ test.beforeEach(async ({ locale }) => {
   await popup.getByRole('button', { name: english ? 'Grant access' : 'Toegang geven' }).click();
   await expect(popup.locator('#status')).toContainText(english ? 'Access is active' : 'Toegang actief');
   writes = 0; failPublication = false;
+  failVerification = false; publicationResponseGate = undefined;
   const originalDiscussion = { id: 86671, comments: [{ id: 1, content: 'Original remote comment', publishedDate: '2023-11-14T22:13:20.000Z', author: { id: 'other-user', displayName: 'Original reviewer' } }] };
   remoteThreads = [originalDiscussion];
   await context.route('https://dev.azure.com/**', async route => {
@@ -134,6 +137,7 @@ test.beforeEach(async ({ locale }) => {
     if (request.method() === 'POST') {
       writes++;
       if (failPublication) { await route.fulfill({ status: 503, json: { message: 'Uncertain result' } }); return; }
+      if (publicationResponseGate) await publicationResponseGate;
       const payload = JSON.parse(request.postData()!);
       const body = payload.body ?? payload.content ?? payload.comments?.[0]?.content;
       const reply = pathname.endsWith('/threads/86671/comments');
@@ -151,15 +155,16 @@ test.beforeEach(async ({ locale }) => {
     if (pathname.includes('/_apis/')) {
       const threadId = /\/threads\/(\d+)$/u.exec(pathname)?.[1];
       if (threadId) {
+        if (failVerification) { await route.fulfill({ status: 503 }); return; }
         const thread = remoteThreads.find(item => item.id === Number(threadId));
         if (thread) await route.fulfill({ json: thread });
         else await route.fulfill({ status: 404 });
         return;
       }
       const json = pathname.endsWith('connectionData') ? { authenticatedUser: { id: 'user-id', providerDisplayName: 'Reviewer' } }
-        : pathname.endsWith('/threads') ? { value: remoteThreads }
+        : pathname.endsWith('/threads') ? { value: pathname.includes('/pullRequests/42/') ? remoteThreads : [] }
         : pathname.endsWith('/iterations') ? { value: [{ id: 1 }] }
-        : pathname.endsWith('/pullRequests/42') ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
+        : /\/pullRequests\/\d+$/u.test(pathname) ? { repository: { id: 'repo-id', project: { id: 'project-id' } }, lastMergeSourceCommit: { commitId: 'a'.repeat(40) }, lastMergeTargetCommit: { commitId: 'b'.repeat(40) } }
         : { id: 'repo-id', project: { id: 'project-id' } };
       await route.fulfill({ json }); return;
     }
@@ -289,6 +294,69 @@ test('an uncertain header publication preserves its draft and cannot silently re
   expect(writes).toBe(1);
   await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('onbekende publicatiestatus');
+  expect(writes).toBe(1);
+});
+
+test('header publication with an unconfirmed GET keeps the receipt across reload without another POST', async () => {
+  const card = page.locator('[data-threadhold-card]');
+  await page.getByRole('textbox', { name: 'Add a comment', exact: true }).fill('Reconcile after reload');
+  await page.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+  failVerification = true;
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true }).click();
+  await expect(card).toHaveAttribute('data-threadhold-state', 'unknown');
+  expect(writes).toBe(1);
+
+  await page.reload();
+  await expect(card).toHaveAttribute('data-threadhold-state', 'unknown');
+  const check = card.getByRole('button', { name: 'Publicatie controleren' });
+  await check.click();
+  await expect(page.getByRole('alert')).toContainText('503');
+  await expect(card.locator('.th-body')).toHaveText('Reconcile after reload');
+  expect(writes).toBe(1);
+
+  failVerification = false;
+  await check.click();
+  await expect(card).toHaveCount(0);
+  expect(writes).toBe(1);
+});
+
+test('header publication can finish an in-flight POST after switching PRs without starting another', async () => {
+  const textbox = page.getByRole('textbox', { name: 'Add a comment', exact: true });
+  const save = page.locator('.repos-comment-editor-fit').filter({ has: textbox })
+    .getByRole('button', { name: 'Opslaan als draft', exact: true });
+  const cards = page.locator('[data-threadhold-card]');
+  await textbox.fill('Post on the original PR');
+  await save.click();
+  await expect(cards.locator('.th-body')).toHaveText('Post on the original PR');
+  const thread = page.locator('[data-existing-thread]');
+  await thread.getByRole('textbox', { name: 'Reply to original comment' }).click();
+  await thread.locator('textarea').fill('Leave this draft on the original PR');
+  await thread.getByRole('button', { name: 'Opslaan als draft', exact: true }).click();
+  await expect(cards).toHaveCount(2);
+
+  const allowResponse = Promise.withResolvers<void>();
+  publicationResponseGate = allowResponse.promise;
+  const posted = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/pullRequests/42/'));
+  const verified = page.waitForResponse(response => response.request().method() === 'GET' &&
+    new URL(response.url()).pathname.endsWith('/pullRequests/42/threads/1') && response.ok());
+  try {
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Drafts plaatsen (2)', exact: true }).click();
+    await posted;
+    await page.evaluate(path => history.pushState(null, '', path), url.replace(/\/42$/u, '/43'));
+    await expect(cards).toHaveCount(0);
+    await textbox.fill('Separate draft on the next PR');
+    await save.click();
+    await expect(cards.locator('.th-body')).toHaveText('Separate draft on the next PR');
+  } finally {
+    allowResponse.resolve();
+  }
+  await verified;
+  await expect(page.getByRole('button', { name: 'Drafts plaatsen (1)', exact: true })).toBeEnabled();
+  await page.evaluate(path => history.pushState(null, '', path), url);
+  await expect(cards).toHaveCount(1);
+  await expect(cards.locator('.th-body')).toHaveText('Leave this draft on the original PR');
   expect(writes).toBe(1);
 });
 

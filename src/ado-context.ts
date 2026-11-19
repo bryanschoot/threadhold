@@ -86,6 +86,17 @@ export async function findPublication(draft: Draft, context: PrContext): Promise
 
   const thread = await readJson<unknown>(`${threadsUrl(context)}/${receipt.threadId}?api-version=7.1`);
   if (!record(thread) || thread.id !== receipt.threadId || thread.isDeleted || !Array.isArray(thread.comments)) return;
+  const { anchor } = draft;
+  const location = thread.threadContext;
+  if (anchor.kind === 'general' && record(location) && location.filePath) return;
+  if (anchor.kind === 'inline') {
+    if (!anchor.filePath || !anchor.side || !anchor.start || !anchor.end || !record(location) || location.filePath !== anchor.filePath) return;
+    const start = anchor.side === 'left' ? location.leftFileStart : location.rightFileStart;
+    const end = anchor.side === 'left' ? location.leftFileEnd : location.rightFileEnd;
+    if (!record(start) || !record(end) ||
+        start.line !== anchor.start.line || start.offset !== anchor.start.offset ||
+        end.line !== anchor.end.line || end.offset !== anchor.end.offset) return;
+  }
 
   const { user } = context;
   const comments: unknown[] = thread.comments;

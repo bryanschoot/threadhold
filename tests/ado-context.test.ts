@@ -56,6 +56,28 @@ describe('publication reconciliation', () => {
     await expect(findPublication(draft, { ...context, scope: { ...draft.scope, userId: 'other' }, user: { ...user, id: 'other' } })).resolves.toBeUndefined();
     expect(send).not.toHaveBeenCalled();
   });
+  it('requires the receipt thread to match the exact inline file, side, and range', async () => {
+    const start = { line: 9, offset: 5 };
+    const end = { line: 11, offset: 2 };
+    const inline: Draft = {
+      ...draft, anchor: { ...draft.anchor, kind: 'inline', filePath: '/src/example.ts', side: 'left', start, end, firstIteration: 1, secondIteration: 2 },
+    };
+    const correct = { filePath: '/src/example.ts', leftFileStart: start, leftFileEnd: end };
+    const send = vi.fn();
+    vi.stubGlobal('fetch', send);
+    for (const threadContext of [
+      undefined,
+      { ...correct, filePath: '/src/other.ts' },
+      { filePath: correct.filePath, rightFileStart: start, rightFileEnd: end },
+      { ...correct, leftFileStart: { ...start, offset: 6 } },
+      { ...correct, leftFileEnd: { ...end, line: 12 } },
+    ]) {
+      send.mockResolvedValueOnce(Response.json({ ...thread(11), threadContext }));
+      await expect(findPublication(inline, context)).resolves.toBeUndefined();
+    }
+    send.mockResolvedValueOnce(Response.json({ ...thread(11), threadContext: correct }));
+    await expect(findPublication(inline, context)).resolves.toEqual({ threadId: 11, commentId: 1 });
+  });
 });
 describe('PR routing', () => {
   it('keeps organization and legacy collection boundaries explicit', () => {
