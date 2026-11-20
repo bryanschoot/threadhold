@@ -1,5 +1,5 @@
 import { isPositiveId, scopeKey, type Draft, type PublicationReceipt } from './contracts';
-import type { PrContext, RemoteThread } from './ado-context';
+import { replyParentId, type PrContext, type RemoteThread } from './ado-context';
 import { t } from './i18n';
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -19,13 +19,11 @@ export async function postDraft(draft: Draft, context: PrContext, threads: Remot
   let body: object;
   let replyThreadId: number | undefined;
   if (anchor.kind === 'reply') {
-    if (!isPositiveId(anchor.threadId)) throw new Error(t('The original thread is no longer available.', 'De oorspronkelijke discussie is niet meer beschikbaar.'));
     replyThreadId = anchor.threadId;
-    const thread = threads.find(item => item.id === replyThreadId && !item.isDeleted);
-    const parent = thread?.comments.find(item => item.id === 1) ?? thread?.comments.find(item => !item.isDeleted);
-    if (!parent || !isPositiveId(parent.id)) throw new Error(t('The original thread is no longer available.', 'De oorspronkelijke discussie is niet meer beschikbaar.'));
+    const parentCommentId = replyParentId(threads, replyThreadId);
+    if (parentCommentId === undefined) throw new Error(t('The original thread is no longer available.', 'De oorspronkelijke discussie is niet meer beschikbaar.'));
     url += `/${replyThreadId}/comments`;
-    body = { ...comment, parentCommentId: parent.id };
+    body = { ...comment, parentCommentId };
   } else if (anchor.kind === 'inline') {
     if (!anchor.filePath || !anchor.side || !anchor.start || !anchor.end || !anchor.firstIteration || !anchor.secondIteration || anchor.sourceCommit !== context.sourceCommit || anchor.targetCommit !== context.targetCommit) {
       throw new Error(t('The file location is incomplete or outdated.', 'De bestandslocatie is onvolledig of verouderd.'));

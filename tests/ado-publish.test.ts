@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { postDraft } from '../src/ado-publish';
 import { parsePrRoute } from '../src/routes';
 import type { Draft } from '../src/contracts';
-import type { PrContext, RemoteThread } from '../src/ado-context';
+import { isStale, type PrContext, type RemoteThread } from '../src/ado-context';
 
 const route = parsePrRoute('https://dev.azure.com/org/project/_git/repo/pullrequest/42')!;
 const context: PrContext = { scope: { route, projectId: 'p', repositoryId: 'r', userId: 'u' }, user: { id: 'u', displayName: 'Reviewer' }, sourceCommit: 's', targetCommit: 't', latestIteration: 2 };
@@ -26,6 +26,23 @@ describe('explicit publication', () => {
     const [url, options] = send.mock.calls[0]!;
     expect(url).toContain('/threads/7/comments?');
     expect(JSON.parse(options.body)).toEqual({ content: 'Frozen café 🧵', parentCommentId: 1, commentType: 1 });
+  });
+  it('uses a surviving comment when the original reply parent was deleted', async () => {
+    const send = vi.fn().mockResolvedValue(Response.json({ id: 5 }));
+    vi.stubGlobal('fetch', send);
+    const original = { id: 1, content: '', publishedDate: '', author: context.user, isDeleted: true };
+    const threads = [{ id: 7, comments: [original, { ...original, id: 4, isDeleted: false }] }];
+    await postDraft({ ...draft, anchor: { ...draft.anchor, kind: 'reply', threadId: 7 } }, context, threads);
+    expect(JSON.parse(send.mock.calls[0]![1].body).parentCommentId).toBe(4);
+  });
+  it('marks a discussion without a surviving parent as stale and never sends the reply', async () => {
+    const send = vi.fn();
+    vi.stubGlobal('fetch', send);
+    const threads = [{ id: 7, comments: [{ id: 1, content: '', publishedDate: '', author: context.user, isDeleted: true }] }];
+    const reply: Draft = { ...draft, anchor: { ...draft.anchor, kind: 'reply', threadId: 7 } };
+    expect(isStale(reply, context, threads)).toBe(true);
+    await expect(postDraft(reply, context, threads)).rejects.toThrow('original thread');
+    expect(send).not.toHaveBeenCalled();
   });
   it('keeps the captured left/right selection and iteration context', async () => {
     const send = vi.fn().mockResolvedValue(Response.json({ id: 23, comments: [{ id: 1 }] }));

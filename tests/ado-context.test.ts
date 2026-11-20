@@ -41,6 +41,12 @@ describe('publication reconciliation', () => {
     await expect(findPublication(reply, context)).resolves.toBeUndefined();
     expect(send).toHaveBeenCalledTimes(1);
   });
+  it('retains the draft when a different author ID shares the reviewer’s username', async () => {
+    const reviewer = { ...user, uniqueName: 'reviewer@example.com' };
+    const other = { ...reviewer, id: 'other-user' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(thread(11, other))));
+    await expect(findPublication(draft, { ...context, user: reviewer })).resolves.toBeUndefined();
+  });
   it('cannot reconcile a legacy journal without a receipt, even with a same-body reply', async () => {
     const send = vi.fn().mockResolvedValue(Response.json(thread(11, user, 2)));
     vi.stubGlobal('fetch', send);
