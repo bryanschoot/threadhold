@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 ## 0.1.1
 
 - A separate read-only PR check builds the Chrome MV3 extension and runs the existing Playwright Chromium suite on all pull requests, including docs-only changes.

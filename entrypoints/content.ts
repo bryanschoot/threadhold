@@ -1,7 +1,7 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { browser } from 'wxt/browser';
 import { scopeKey, type Draft, type DraftRequest, type DraftResult, type ExtensionResponse, type PrRoute, type PublicationReceipt } from '../src/contracts';
-import { findPublication, isStale, loadPrContext, readThreads, type PrContext, type RemoteThread } from '../src/ado-context';
+import { findPublication, isStale, loadPrContext, readThreads, replyParentId, type PrContext, type RemoteThread } from '../src/ado-context';
 import { parsePrRoute } from '../src/routes';
 import { discoverEditors, findDraftLocation, installNativeDiffCapture, openDraftEditor, readEditor, readNativeEditorActions, sameEditor, writeEditor, type NativeEditor } from '../src/ado-editor';
 import { createActionNotice, createDraftCard, createDraftHelp, createPublishControl, createSaveControl, type ActionNotice, type DraftUiActions, type SaveControl } from '../src/ui';
@@ -355,7 +355,7 @@ export default defineContentScript({
     }
     function validateAnchor(editor: NativeEditor, fresh: PrContext, activeThreads: RemoteThread[]) {
       if (editor.anchor.kind === 'inline' && (editor.anchor.sourceCommit !== fresh.sourceCommit || editor.anchor.targetCommit !== fresh.targetCommit)) throw new Error(t('The code changed since the editor was opened. Refresh the diff first; your text is retained.', 'De code veranderde sinds het openen van de editor. Ververs eerst de diff; je tekst blijft behouden.'));
-      if (editor.anchor.kind === 'reply' && !activeThreads.some(thread => thread.id === editor.anchor.threadId && !thread.isDeleted)) throw new Error(t('The original thread no longer exists.', 'De oorspronkelijke thread bestaat niet meer.'));
+      if (editor.anchor.kind === 'reply' && replyParentId(activeThreads, editor.anchor.threadId) === undefined) throw new Error(t('The original thread is no longer available for replies.', 'De oorspronkelijke discussie is niet meer beschikbaar voor antwoorden.'));
     }
     function isEditorSession(state: EditorState, requestId?: string): boolean {
       const { textarea, root } = state.editor;

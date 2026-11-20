@@ -68,8 +68,20 @@ export async function readThreads(context: PrContext): Promise<RemoteThread[]> {
   if (!Array.isArray(result.value)) throw new Error(t('Invalid thread response from Azure DevOps.', 'Ongeldig threadantwoord van Azure DevOps.'));
   return result.value;
 }
+export function replyParentId(threads: RemoteThread[], threadId: number | undefined): number | undefined {
+  if (!isPositiveId(threadId)) return;
+  const thread = threads.find(item => item.id === threadId && !item.isDeleted);
+  if (!thread) return;
+  let first: number | undefined;
+  for (const comment of thread.comments) {
+    if (comment.isDeleted || !isPositiveId(comment.id)) continue;
+    if (comment.id === 1) return 1;
+    first ??= comment.id;
+  }
+  return first;
+}
 export function isStale(draft: Draft, context: PrContext, threads: RemoteThread[]): boolean {
-  if (draft.anchor.kind === 'reply') return !threads.some((thread) => thread.id === draft.anchor.threadId && !thread.isDeleted);
+  if (draft.anchor.kind === 'reply') return replyParentId(threads, draft.anchor.threadId) === undefined;
   return draft.anchor.kind === 'inline' && (draft.anchor.sourceCommit !== context.sourceCommit || draft.anchor.targetCommit !== context.targetCommit);
 }
 function record(value: unknown): value is Record<string, unknown> {
@@ -102,7 +114,6 @@ export async function findPublication(draft: Draft, context: PrContext): Promise
   const comments: unknown[] = thread.comments;
   for (const comment of comments) {
     if (!record(comment) || comment.id !== receipt.commentId || comment.isDeleted || comment.content !== submission.body || !record(comment.author)) continue;
-    if (comment.author.id === user.id || (user.descriptor && comment.author.descriptor === user.descriptor) ||
-        (user.uniqueName && comment.author.uniqueName === user.uniqueName)) return receipt;
+    if (comment.author.id === user.id) return receipt;
   }
 }
